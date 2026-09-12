@@ -509,8 +509,20 @@ function renderLocations(locations) {
 
     const lat = loc.latitude ? loc.latitude.toFixed(6) : 'N/A';
     const lon = loc.longitude ? loc.longitude.toFixed(6) : 'N/A';
-    const acc = loc.accuracy ? `±${Math.round(loc.accuracy)}m` : 'N/A';
+    const accVal = loc.accuracy ? Math.round(loc.accuracy) : 9999;
+    const acc = loc.accuracy ? `±${accVal}m` : 'N/A';
     const mapsUrl = loc.mapsUrl || (loc.latitude && loc.longitude ? `https://maps.google.com/?q=${loc.latitude},${loc.longitude}` : '#');
+    const prov = loc.provider || '';
+
+    let pillClass = 'accuracy-pill-net';
+    let provLabel = `📡 Red (${acc})`;
+    if (accVal <= 35 || prov.toLowerCase().includes('gps')) {
+      pillClass = 'accuracy-pill-gps';
+      provLabel = `🎯 GPS Satelital (${acc})`;
+    } else if (prov.toLowerCase().includes('ip') || accVal >= 1000) {
+      pillClass = 'accuracy-pill-ip';
+      provLabel = `⚠️ Aprox. IP (~5km)`;
+    }
 
     html += `
       <div class="location-item" data-id="${loc.id}">
@@ -520,8 +532,9 @@ function renderLocations(locations) {
             <div class="recording-name">${escapeHtml(loc.deviceName || 'Teléfono')} <span style="font-weight: 400; color: var(--text-dim); font-size: 0.85rem;">(${escapeHtml(loc.deviceId)})</span></div>
             <div class="recording-meta">
               <span>📅 ${dateFormatted} ${timeFormatted}</span>
-              <span class="meta-pill" style="color: #38bdf8;">🌐 Lat: ${lat}, Lon: ${lon}</span>
-              <span class="meta-pill">🎯 Precisión: ${acc}</span>
+              <span class="meta-pill" style="color: #38bdf8;">🌐 ${lat}, ${lon}</span>
+              <span class="meta-pill ${pillClass}">${provLabel}</span>
+              ${loc.city ? `<span class="meta-pill">🏙️ ${escapeHtml(loc.city)}</span>` : ''}
               ${loc.battery !== null ? `<span class="meta-pill">🔋 ${loc.battery}%</span>` : ''}
             </div>
           </div>
@@ -714,14 +727,17 @@ function renderLiveFileList(currentPath, files) {
   let html = '';
   files.forEach(f => {
     const isDir = f.isDirectory;
-    const icon = isDir ? '📁' : getFileIcon(f.name);
+    const defaultIcon = isDir ? '📁' : getFileIcon(f.name);
+    const iconHtml = f.thumbnailBase64 
+      ? `<img class="fm-thumb-preview" src="data:image/jpeg;base64,${f.thumbnailBase64}" alt="${escapeHtml(f.name)}" title="Miniatura previa (Click para solicitar descarga)" onclick="requestFileTransfer('${escapeJsString(f.path)}')" />`
+      : defaultIcon;
     const sizeStr = isDir ? 'Carpeta' : formatBytes(f.size || 0);
     const dateStr = f.lastModified ? new Date(f.lastModified).toLocaleString('es-ES') : '';
 
     html += `
       <div class="fm-item-row">
         <div class="fm-item-left">
-          <span class="fm-item-icon">${icon}</span>
+          <span class="fm-item-icon">${iconHtml}</span>
           <div class="fm-item-info">
             <div class="fm-item-name ${isDir ? 'dir-name' : ''}" 
                  onclick="${isDir ? `browseToPath('${escapeJsString(f.path)}')` : ''}"
