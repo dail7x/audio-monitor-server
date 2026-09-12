@@ -264,7 +264,7 @@ wss.on('connection', (ws, req) => {
       try {
         const data = JSON.parse(message);
 
-        if (data.action === 'trigger_record') {
+        if (data.action === 'trigger_record' || data.action === 'record') {
           const targetDeviceId = data.deviceId || Array.from(connectedDevices.keys())[0];
           const durationSeconds = parseInt(data.durationSeconds, 10) || 60;
 
