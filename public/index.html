@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Audio Monitor - Cuarto de Máquinas</title>
+  <title>Audio Monitor Pro - Cuartos de Máquinas & Localizador GPS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -23,8 +23,8 @@
           </svg>
         </div>
         <div>
-          <h1>Audio Monitor Pro</h1>
-          <p class="subtitle">Monitoreo Acústico Remoto de Maquinaria</p>
+          <h1>Audio Monitor & Localizador Pro</h1>
+          <p class="subtitle">Monitoreo Acústico Remoto y Geolocalización de Maquinaria</p>
         </div>
       </div>
 
@@ -60,11 +60,11 @@
         <hr class="divider">
 
         <div class="card-header">
-          <h2>🎙️ Disparador de Grabación</h2>
+          <h2>🎙️ Control Remoto</h2>
         </div>
 
         <div class="trigger-section">
-          <label class="section-label">Seleccionar Duración:</label>
+          <label class="section-label">Duración de Grabación:</label>
           <div class="duration-presets" id="duration-presets">
             <button type="button" class="preset-btn active" data-seconds="20">20 Seg</button>
             <button type="button" class="preset-btn" data-seconds="60">1 Min</button>
@@ -97,34 +97,62 @@
             <button id="btn-cancel-recording" class="btn btn-cancel-sm">Detener Ahora</button>
           </div>
 
+          <!-- Primary Trigger Button (Audio + GPS) -->
           <button id="btn-start-record" class="btn btn-primary btn-record" disabled>
             <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
               <circle cx="12" cy="12" r="8"/>
             </svg>
-            <span>Iniciar Grabación Remota</span>
+            <span>Iniciar Grabación con GPS</span>
+          </button>
+
+          <!-- Location Only Trigger Button -->
+          <button id="btn-request-location" class="btn btn-secondary btn-location" disabled>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/>
+              <circle cx="12" cy="10" r="3"/>
+            </svg>
+            <span>📍 Solicitar Ubicación Actual (Sin Audio)</span>
           </button>
         </div>
       </section>
 
-      <!-- Right Column: Recordings Archive & Player -->
+      <!-- Right Column: Tabbed View (Audio Recordings vs GPS Locations) -->
       <section class="card recordings-card">
-        <div class="card-header">
-          <div>
-            <h2>🗂️ Registro de Grabaciones</h2>
-            <p class="subtitle" id="recordings-stats">Cargando grabaciones...</p>
+        <div class="card-header-with-tabs">
+          <div class="tabs-nav">
+            <button type="button" class="tab-btn active" data-tab="tab-recordings" id="tab-btn-recordings">
+              🎙️ Grabaciones de Audio <span id="recordings-count-badge" class="tab-badge">0</span>
+            </button>
+            <button type="button" class="tab-btn" data-tab="tab-locations" id="tab-btn-locations">
+              📍 Registro de Ubicaciones <span id="locations-count-badge" class="tab-badge">0</span>
+            </button>
           </div>
-          <button id="btn-refresh-list" class="btn btn-icon" title="Actualizar lista">
+          <button id="btn-refresh-list" class="btn btn-icon" title="Actualizar datos">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
             </svg>
           </button>
         </div>
 
-        <div class="recordings-list-wrapper">
-          <div id="recordings-table-container">
-            <!-- Populated by JS -->
-            <div class="empty-state">
-              <p>Aún no hay grabaciones registradas.</p>
+        <!-- TAB 1: AUDIO RECORDINGS -->
+        <div id="tab-recordings" class="tab-content active">
+          <div class="recordings-list-wrapper">
+            <div id="recordings-table-container">
+              <div class="empty-state">
+                <p>Aún no hay grabaciones registradas.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: GPS LOCATIONS LOG -->
+        <div id="tab-locations" class="tab-content hidden">
+          <div class="recordings-list-wrapper">
+            <div id="locations-table-container">
+              <div class="empty-state">
+                <p>Aún no hay reportes de ubicación registrados.</p>
+                <small>Usa el botón "Solicitar Ubicación Actual" para consultar la posición del cuarto de máquinas en tiempo real.</small>
+              </div>
             </div>
           </div>
         </div>
@@ -175,6 +203,9 @@
       </div>
       <audio id="global-audio-element" preload="none"></audio>
     </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
   </div>
 
   <script src="app.js"></script>

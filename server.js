@@ -13,6 +13,7 @@ const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 const STORAGE_DIR = path.join(__dirname, 'storage', 'recordings');
 const DB_FILE = path.join(__dirname, 'storage', 'metadata.json');
+const LOCATIONS_FILE = path.join(__dirname, 'storage', 'locations.json');
 
 // Ensure storage directory exists
 if (!fs.existsSync(STORAGE_DIR)) {
@@ -33,6 +34,22 @@ function loadMetadata() {
 
 function saveMetadata(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+// Helpers for locations persistence
+function loadLocations() {
+  if (fs.existsSync(LOCATIONS_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(LOCATIONS_FILE, 'utf8'));
+    } catch (err) {
+      console.error('Error reading locations.json:', err);
+    }
+  }
+  return [];
+}
+
+function saveLocations(data) {
+  fs.writeFileSync(LOCATIONS_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
 // Multer storage setup for incoming audio files
@@ -136,6 +153,32 @@ wss.on('connection', (ws, req) => {
             elapsedSeconds: data.elapsedSeconds,
             totalSeconds: data.totalSeconds
           });
+        } else if (data.type === 'location_report') {
+          console.log(`📍 Reporte de ubicación recibido de ${deviceId}: Lat ${data.latitude}, Lon ${data.longitude}`);
+          const locations = loadLocations();
+          const newLoc = {
+            id: `loc_${Date.now()}`,
+            deviceId: data.deviceId || deviceId,
+            deviceName: data.deviceName || device.info?.name || 'Teléfono Cuarto de Máquinas',
+            latitude: data.latitude ?? null,
+            longitude: data.longitude ?? null,
+            accuracy: data.accuracy ?? null,
+            mapsUrl: data.mapsUrl || (data.latitude && data.longitude ? `https://maps.google.com/?q=${data.latitude},${data.longitude}` : null),
+            provider: data.provider || 'gps',
+            battery: data.battery ?? device.info?.battery ?? null,
+            networkType: data.networkType ?? device.info?.networkType ?? 'UNKNOWN',
+            notes: data.notes || '',
+            error: data.error || null,
+            createdAt: new Date().toISOString()
+          };
+
+          locations.unshift(newLoc);
+          saveLocations(locations);
+
+          broadcastToDashboards({
+            type: 'NEW_LOCATION_REPORT',
+            location: newLoc
+          });
         }
       } catch (err) {
         console.error('Error procesando mensaje WebSocket del dispositivo:', err);
@@ -204,6 +247,29 @@ wss.on('connection', (ws, req) => {
               target.ws.send(JSON.stringify({ action: 'cancel' }));
             }
           }
+        } else if (data.action === 'request_location') {
+          const targetDeviceId = data.deviceId || Array.from(connectedDevices.keys())[0];
+          if (!targetDeviceId || !connectedDevices.has(targetDeviceId)) {
+            ws.send(JSON.stringify({
+              type: 'ERROR',
+              message: 'No hay ningún teléfono Android conectado para solicitar ubicación.'
+            }));
+            return;
+          }
+
+          const target = connectedDevices.get(targetDeviceId);
+          if (target.ws.readyState === WebSocket.OPEN) {
+            console.log(`📍 Solicitando ubicación GPS en tiempo real a ${targetDeviceId}...`);
+            target.ws.send(JSON.stringify({
+              action: 'get_location',
+              requestId: `loc_req_${Date.now()}`
+            }));
+
+            broadcastToDashboards({
+              type: 'LOCATION_REQUESTED',
+              deviceId: targetDeviceId
+            });
+          }
         }
       } catch (err) {
         console.error('Error procesando mensaje del dashboard:', err);
@@ -262,7 +328,84 @@ app.post('/api/record/trigger', (req, res) => {
   res.json({ success: true, message: `Grabación de ${durationSeconds}s iniciada en ${targetId}` });
 });
 
-// 3. Upload Audio File from Android
+// 3. Request Instant Location via HTTP
+app.post('/api/location/request', (req, res) => {
+  const { deviceId } = req.body;
+  const targetId = deviceId || Array.from(connectedDevices.keys())[0];
+
+  if (!targetId || !connectedDevices.has(targetId)) {
+    return res.status(404).json({ error: 'No hay dispositivo Android conectado' });
+  }
+
+  const target = connectedDevices.get(targetId);
+  target.ws.send(JSON.stringify({
+    action: 'get_location',
+    requestId: `loc_req_${Date.now()}`
+  }));
+
+  broadcastToDashboards({
+    type: 'LOCATION_REQUESTED',
+    deviceId: targetId
+  });
+
+  res.json({ success: true, message: `Solicitud de ubicación enviada a ${targetId}` });
+});
+
+// 4. Report Location from Android via REST
+app.post('/api/location/report', (req, res) => {
+  const { deviceId, deviceName, latitude, longitude, accuracy, mapsUrl, notes, provider, battery, networkType, error } = req.body;
+  const locations = loadLocations();
+
+  const newLoc = {
+    id: `loc_${Date.now()}`,
+    deviceId: deviceId || 'desconocido',
+    deviceName: deviceName || 'Teléfono Cuarto de Máquinas',
+    latitude: latitude ? parseFloat(latitude) : null,
+    longitude: longitude ? parseFloat(longitude) : null,
+    accuracy: accuracy ? parseFloat(accuracy) : null,
+    mapsUrl: mapsUrl || (latitude && longitude ? `https://maps.google.com/?q=${latitude},${longitude}` : null),
+    provider: provider || 'gps',
+    battery: battery ?? null,
+    networkType: networkType || 'UNKNOWN',
+    notes: notes || '',
+    error: error || null,
+    createdAt: new Date().toISOString()
+  };
+
+  locations.unshift(newLoc);
+  saveLocations(locations);
+
+  console.log(`📍 Reporte de ubicación REST guardado para ${newLoc.deviceName}: Lat ${latitude}, Lon ${longitude}`);
+
+  broadcastToDashboards({
+    type: 'NEW_LOCATION_REPORT',
+    location: newLoc
+  });
+
+  res.json({ success: true, location: newLoc });
+});
+
+// 5. Get Stored Locations History
+app.get('/api/locations', (req, res) => {
+  res.json(loadLocations());
+});
+
+// 6. Delete Location Record
+app.delete('/api/locations/:id', (req, res) => {
+  const locId = req.params.id;
+  let locations = loadLocations();
+  locations = locations.filter(item => item.id !== locId);
+  saveLocations(locations);
+
+  broadcastToDashboards({
+    type: 'LOCATION_DELETED',
+    id: locId
+  });
+
+  res.json({ success: true, message: 'Registro de ubicación eliminado' });
+});
+
+// 7. Upload Audio File from Android
 app.post('/api/upload', upload.single('audio'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No se recibió ningún archivo de audio' });
@@ -270,7 +413,13 @@ app.post('/api/upload', upload.single('audio'), (req, res) => {
 
   const duration = req.body.durationSeconds ? parseInt(req.body.durationSeconds, 10) : null;
   const deviceName = req.body.deviceName || 'Android Cuarto Máquinas';
+  const deviceId = req.body.deviceId || 'cuarto_maquinas';
   const notes = req.body.notes || '';
+  const latitude = req.body.latitude ? parseFloat(req.body.latitude) : null;
+  const longitude = req.body.longitude ? parseFloat(req.body.longitude) : null;
+  const accuracy = req.body.accuracy ? parseFloat(req.body.accuracy) : null;
+  const mapsUrl = req.body.mapsUrl || (latitude && longitude ? `https://maps.google.com/?q=${latitude},${longitude}` : null);
+  const locationProvider = req.body.locationProvider || (latitude ? 'gps' : null);
 
   const metadata = loadMetadata();
   const fileStat = fs.statSync(req.file.path);
@@ -282,14 +431,20 @@ app.post('/api/upload', upload.single('audio'), (req, res) => {
     size: fileStat.size,
     durationSeconds: duration,
     createdAt: new Date().toISOString(),
+    deviceId,
     deviceName,
+    latitude,
+    longitude,
+    accuracy,
+    mapsUrl,
+    locationProvider,
     notes
   };
 
   metadata.unshift(newRecord);
   saveMetadata(metadata);
 
-  console.log(`✅ Nuevo audio guardado: ${req.file.filename} (${(fileStat.size / 1024 / 1024).toFixed(2)} MB)`);
+  console.log(`✅ Nuevo audio guardado: ${req.file.filename} (${(fileStat.size / 1024 / 1024).toFixed(2)} MB) ${latitude ? `[📍 Lat: ${latitude}, Lon: ${longitude}]` : ''}`);
 
   // Notify all connected dashboard clients
   broadcastToDashboards({
@@ -304,17 +459,16 @@ app.post('/api/upload', upload.single('audio'), (req, res) => {
   });
 });
 
-// 4. List all stored recordings
+// 8. List all stored recordings
 app.get('/api/recordings', (req, res) => {
   const metadata = loadMetadata();
-  // Filter out any metadata entries whose physical files were deleted
   const validRecords = metadata.filter(rec => {
     return fs.existsSync(path.join(STORAGE_DIR, rec.filename));
   });
   res.json(validRecords);
 });
 
-// 5. Stream / Download audio file
+// 9. Stream / Download audio file
 app.get('/api/recordings/:filename', (req, res) => {
   const filePath = path.join(STORAGE_DIR, req.params.filename);
   if (!fs.existsSync(filePath)) {
@@ -347,7 +501,7 @@ app.get('/api/recordings/:filename', (req, res) => {
   }
 });
 
-// 6. Delete recording
+// 10. Delete recording
 app.delete('/api/recordings/:filename', (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join(STORAGE_DIR, filename);
