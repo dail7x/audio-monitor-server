@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vista Previa - App Android (Audio Monitor)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-slate: #0b0f19;
+      --phone-body: #1e293b;
+      --phone-screen: #0f172a;
+      --phone-border: #334155;
+      --primary-blue: #2563eb;
+      --primary-blue-hover: #1d4ed8;
+      --btn-gray: #475569;
+      --accent-red: #ef4444;
+      --accent-green: #22c55e;
+      --text-white: #ffffff;
+      --text-muted: #94a3b8;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background-color: var(--bg-slate);
+      font-family: 'Outfit', sans-serif;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 30px 20px;
+    }
+
+    .preview-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .preview-header h1 {
+      font-size: 1.6rem;
+      margin-bottom: 6px;
+    }
+
+    .preview-header p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .nav-links {
+      margin-top: 10px;
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+
+    .nav-links a {
+      color: #6366f1;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 4px 12px;
+      background: rgba(99, 102, 241, 0.1);
+      border-radius: 6px;
+    }
+
+    .nav-links a:hover {
+      text-decoration: underline;
+    }
+
+    /* Phone Shell Frame */
+    .phone-frame {
+      width: 380px;
+      height: 780px;
+      background: #020617;
+      border: 12px solid #1e293b;
+      border-radius: 48px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 2px rgba(255, 255, 255, 0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Android Status Bar */
+    .android-status-bar {
+      height: 32px;
+      background: #0f172a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 16px;
+      font-size: 0.75rem;
+      font-family: 'Roboto', sans-serif;
+      color: #cbd5e1;
+      z-index: 10;
+    }
+
+    .status-icons {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .notch-camera {
+      width: 12px;
+      height: 12px;
+      background: #000;
+      border-radius: 50%;
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    /* Android App Screen (activity_main.xml layout) */
+    .android-screen {
+      flex: 1;
+      background: #0f172a;
+      padding: 20px 18px;
+      overflow-y: auto;
+      font-family: 'Roboto', sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .android-screen::-webkit-scrollbar { width: 4px; }
+    .android-screen::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+    .app-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 2px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .app-subtitle {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      margin-bottom: 16px;
+    }
+
+    /* Status Card */
+    .status-card {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .status-text {
+      font-size: 0.85rem;
+      font-weight: 700;
+      transition: color 0.3s;
+    }
+
+    .status-stopped { color: #ef4444; }
+    .status-active { color: #22c55e; }
+
+    /* Form Fields */
+    .section-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #e2e8f0;
+      margin-bottom: 12px;
+    }
+
+    .field-label {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    .android-input {
+      width: 100%;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: #ffffff;
+      font-size: 0.85rem;
+      font-family: 'Roboto', sans-serif;
+      margin-bottom: 12px;
+      outline: none;
+    }
+
+    .android-input:focus {
+      border-color: #3b82f6;
+    }
+
+    /* Buttons */
+    .btn-android {
+      width: 100%;
+      padding: 13px;
+      border-radius: 6px;
+      border: none;
+      font-family: 'Roboto', sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      transition: all 0.2s ease;
+      margin-bottom: 10px;
+    }
+
+    .btn-permissions {
+      background: #475569;
+      color: #ffffff;
+    }
+
+    .btn-permissions:hover {
+      background: #64748b;
+    }
+
+    .btn-toggle {
+      background: #2563eb;
+      color: #ffffff;
+      padding: 15px;
+      margin-bottom: 16px;
+    }
+
+    .btn-toggle.btn-stop {
+      background: #dc2626;
+    }
+
+    .btn-toggle:hover {
+      opacity: 0.9;
+    }
+
+    .help-note {
+      font-size: 0.72rem;
+      color: #64748b;
+      line-height: 1.4;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px dashed #334155;
+    }
+
+    /* Android Navigation Bar */
+    .android-nav-bar {
+      height: 38px;
+      background: #020617;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      padding: 0 30px;
+    }
+
+    .nav-btn {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #94a3b8;
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: absolute;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(30, 41, 59, 0.95);
+      border: 1px solid #475569;
+      color: #ffffff;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 100;
+      text-align: center;
+      width: 80%;
+    }
+
+    .toast.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="preview-header">
+    <h1>📱 Vista Previa: Interfaz Android Nativa</h1>
+    <p>Simulador interactivo del layout XML (<code>activity_main.xml</code>) ejecutándose dentro del marco del teléfono.</p>
+    <div class="nav-links">
+      <a href="/">← Volver al Dashboard Web</a>
+      <a href="javascript:void(0)" onclick="simulateIncomingRecord()">🎙️ Simular orden de grabación</a>
+    </div>
+  </div>
+
+  <!-- Phone Shell -->
+  <div class="phone-frame">
+    <div class="notch-camera"></div>
+
+    <!-- Status Bar -->
+    <div class="android-status-bar">
+      <span id="phone-clock">12:30</span>
+      <div class="status-icons">
+        <span id="notif-icon" style="display: none;">🎙️</span>
+        <span>📶 LTE</span>
+        <span>🔋 88%</span>
+      </div>
+    </div>
+
+    <!-- Android Activity Screen -->
+    <div class="android-screen">
+      <div class="app-title">🎙️ Audio Monitor</div>
+      <div class="app-subtitle">Nodo de Monitoreo Remoto (Cuarto de Máquinas)</div>
+
+      <!-- Live Status Card -->
+      <div class="status-card">
+        <div id="status-display" class="status-text status-stopped">
+          🔴 ESTADO: Servicio DETENIDO
+        </div>
+      </div>
+
+      <!-- Config Section -->
+      <div class="section-title">Configuración del Servidor</div>
+
+      <label class="field-label">URL del Servidor (HTTP o WS):</label>
+      <input type="text" id="phone-url" class="android-input" value="http://192.168.1.100:3000">
+
+      <label class="field-label">ID del Dispositivo:</label>
+      <input type="text" id="phone-device-id" class="android-input" value="cuarto_maquinas">
+
+      <label class="field-label">Nombre Descriptivo:</label>
+      <input type="text" id="phone-device-name" class="android-input" value="Teléfono Cuarto de Máquinas">
+
+      <!-- Action Buttons -->
+      <button type="button" id="btn-permissions" class="btn-android btn-permissions" onclick="grantPermissions()">
+        1. CONCEDER PERMISOS Y BATERÍA
+      </button>
+
+      <button type="button" id="btn-service" class="btn-android btn-toggle" onclick="toggleService()">
+        2. INICIAR MONITOREO 24/7
+      </button>
+
+      <div class="help-note">
+        💡 <strong>Modo desatendido:</strong> Una vez iniciado el monitoreo, puedes apagar la pantalla del móvil. El servicio continuará en segundo plano escuchando comandos de grabación por WiFi o datos celulares.
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast">Mensaje toast</div>
+
+    <!-- Navigation Bar -->
+    <div class="android-nav-bar">
+      <div class="nav-btn">◀</div>
+      <div class="nav-btn">●</div>
+      <div class="nav-btn">■</div>
+    </div>
+  </div>
+
+  <script>
+    let isRunning = false;
+    let permissionsGranted = false;
+
+    function updateClock() {
+      const now = new Date();
+      const h = String(now.getHours()).padStart(2, '0');
+      const m = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById('phone-clock').textContent = `${h}:${m}`;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function grantPermissions() {
+      permissionsGranted = true;
+      showToast("✅ Permisos de Micrófono y Batería concedidos");
+    }
+
+    function toggleService() {
+      const statusDisplay = document.getElementById('status-display');
+      const btnService = document.getElementById('btn-service');
+      const notifIcon = document.getElementById('notif-icon');
+
+      if (!isRunning) {
+        if (!permissionsGranted) {
+          showToast("⚠️ Concede primero los permisos (Paso 1)");
+          return;
+        }
+        isRunning = true;
+        statusDisplay.className = "status-text status-active";
+        statusDisplay.textContent = "🟢 ESTADO: Monitoreo ACTIVO en segundo plano (24/7)";
+        btnService.textContent = "DETENER MONITOREO";
+        btnService.className = "btn-android btn-toggle btn-stop";
+        notifIcon.style.display = "inline";
+        showToast("🚀 Monitoreo Activo en Segundo Plano");
+      } else {
+        isRunning = false;
+        statusDisplay.className = "status-text status-stopped";
+        statusDisplay.textContent = "🔴 ESTADO: Servicio DETENIDO";
+        btnService.textContent = "2. INICIAR MONITOREO 24/7";
+        btnService.className = "btn-android btn-toggle";
+        notifIcon.style.display = "none";
+        showToast("🛑 Servicio detenido");
+      }
+    }
+
+    function simulateIncomingRecord() {
+      if (!isRunning) {
+        showToast("⚠️ Inicia primero el servicio para recibir órdenes");
+        return;
+      }
+      showToast("🎙️ [Orden Web] Grabando audio por 20 seg...");
+      const statusDisplay = document.getElementById('status-display');
+      statusDisplay.textContent = "🎙️ GRABANDO AUDIO EN VIVO...";
+      statusDisplay.style.color = "#f59e0b";
+
+      setTimeout(() => {
+        statusDisplay.textContent = "⬆️ Subiendo archivo al servidor...";
+        showToast("⬆️ Grabación lista, subiendo archivo...");
+      }, 3000);
+
+      setTimeout(() => {
+        statusDisplay.textContent = "🟢 ESTADO: Monitoreo ACTIVO en segundo plano (24/7)";
+        statusDisplay.style.color = "#22c55e";
+        showToast("✅ Audio subido exitosamente");
+      }, 5000);
+    }
+  </script>
+</body>
+</html>

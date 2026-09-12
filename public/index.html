@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio Monitor - Cuarto de Máquinas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="main-header">
+      <div class="logo-area">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </div>
+        <div>
+          <h1>Audio Monitor Pro</h1>
+          <p class="subtitle">Monitoreo Acústico Remoto de Maquinaria</p>
+        </div>
+      </div>
+
+      <div class="header-status">
+        <a href="/phone-preview.html" target="_blank" class="badge" style="color: #cbd5e1; text-decoration: none; background: rgba(99, 102, 241, 0.2); border-color: #6366f1;">
+          📱 Ver Pantalla Android
+        </a>
+        <div id="server-ws-status" class="badge badge-ws connecting">
+          <span class="dot"></span>
+          <span class="label">Servidor: Conectando...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="dashboard-grid">
+      <!-- Left Column: Device Status & Remote Trigger -->
+      <section class="card control-card">
+        <div class="card-header">
+          <h2>📱 Estado del Dispositivo</h2>
+          <span id="device-count-badge" class="badge">0 Conectados</span>
+        </div>
+
+        <div id="device-card-content" class="device-info-container">
+          <!-- Populated by JS -->
+          <div class="device-placeholder">
+            <div class="pulsing-spinner"></div>
+            <p>Esperando conexión del teléfono Android...</p>
+            <small>Abre la app en el dispositivo y configura la URL del servidor</small>
+          </div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="card-header">
+          <h2>🎙️ Disparador de Grabación</h2>
+        </div>
+
+        <div class="trigger-section">
+          <label class="section-label">Seleccionar Duración:</label>
+          <div class="duration-presets" id="duration-presets">
+            <button type="button" class="preset-btn active" data-seconds="20">20 Seg</button>
+            <button type="button" class="preset-btn" data-seconds="60">1 Min</button>
+            <button type="button" class="preset-btn" data-seconds="180">3 Min</button>
+            <button type="button" class="preset-btn" data-seconds="300">5 Min</button>
+            <button type="button" class="preset-btn" data-seconds="600">10 Min</button>
+            <button type="button" class="preset-btn" data-seconds="custom">Otro</button>
+          </div>
+
+          <div id="custom-duration-container" class="custom-duration-box hidden">
+            <label for="custom-duration-input">Duración personalizada (segundos):</label>
+            <div class="input-group">
+              <input type="number" id="custom-duration-input" min="5" max="3600" value="45" placeholder="ej: 45">
+              <span class="input-addon">segundos</span>
+            </div>
+          </div>
+
+          <!-- Active Recording Progress Overlay -->
+          <div id="recording-active-banner" class="recording-active-box hidden">
+            <div class="recording-wave-animation">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div class="recording-timer-info">
+              <span class="rec-dot"></span>
+              <strong id="recording-countdown-text">Grabando audio: 00:20</strong>
+            </div>
+            <div class="progress-bar-bg">
+              <div id="recording-progress-fill" class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+            <button id="btn-cancel-recording" class="btn btn-cancel-sm">Detener Ahora</button>
+          </div>
+
+          <button id="btn-start-record" class="btn btn-primary btn-record" disabled>
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+              <circle cx="12" cy="12" r="8"/>
+            </svg>
+            <span>Iniciar Grabación Remota</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Right Column: Recordings Archive & Player -->
+      <section class="card recordings-card">
+        <div class="card-header">
+          <div>
+            <h2>🗂️ Registro de Grabaciones</h2>
+            <p class="subtitle" id="recordings-stats">Cargando grabaciones...</p>
+          </div>
+          <button id="btn-refresh-list" class="btn btn-icon" title="Actualizar lista">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="recordings-list-wrapper">
+          <div id="recordings-table-container">
+            <!-- Populated by JS -->
+            <div class="empty-state">
+              <p>Aún no hay grabaciones registradas.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Global Floating Audio Player Bar -->
+    <div id="floating-player" class="floating-player hidden">
+      <div class="player-track-info">
+        <div class="track-icon">🎵</div>
+        <div>
+          <h4 id="player-title">Nombre del archivo</h4>
+          <span id="player-date">Fecha y hora</span>
+        </div>
+      </div>
+
+      <div class="player-controls-center">
+        <div class="player-buttons">
+          <button id="player-play-pause-btn" class="player-btn-main">
+            <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <svg id="pause-icon" class="hidden" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          </button>
+        </div>
+        <div class="player-timeline">
+          <span id="player-current-time" class="time-label">00:00</span>
+          <input type="range" id="player-seek-slider" min="0" max="100" value="0" step="0.1">
+          <span id="player-total-time" class="time-label">00:00</span>
+        </div>
+      </div>
+
+      <div class="player-extras">
+        <div class="speed-selector">
+          <select id="player-speed-select">
+            <option value="1">1.0x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2.0x</option>
+          </select>
+        </div>
+        <a id="player-download-btn" href="#" download class="btn btn-icon-sm" title="Descargar audio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </a>
+        <button id="player-close-btn" class="btn btn-icon-sm" title="Cerrar reproductor">✕</button>
+      </div>
+      <audio id="global-audio-element" preload="none"></audio>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
