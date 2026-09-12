@@ -12,12 +12,17 @@ const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 const STORAGE_DIR = path.join(__dirname, 'storage', 'recordings');
+const REMOTE_FILES_DIR = path.join(__dirname, 'storage', 'remote_files');
 const DB_FILE = path.join(__dirname, 'storage', 'metadata.json');
 const LOCATIONS_FILE = path.join(__dirname, 'storage', 'locations.json');
+const REMOTE_FILES_META = path.join(__dirname, 'storage', 'remote_files.json');
 
-// Ensure storage directory exists
+// Ensure storage directories exist
 if (!fs.existsSync(STORAGE_DIR)) {
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
+}
+if (!fs.existsSync(REMOTE_FILES_DIR)) {
+  fs.mkdirSync(REMOTE_FILES_DIR, { recursive: true });
 }
 
 // Helpers for metadata persistence
@@ -52,8 +57,24 @@ function saveLocations(data) {
   fs.writeFileSync(LOCATIONS_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
+// Helpers for remote files persistence
+function loadRemoteFiles() {
+  if (fs.existsSync(REMOTE_FILES_META)) {
+    try {
+      return JSON.parse(fs.readFileSync(REMOTE_FILES_META, 'utf8'));
+    } catch (err) {
+      console.error('Error reading remote_files.json:', err);
+    }
+  }
+  return [];
+}
+
+function saveRemoteFiles(data) {
+  fs.writeFileSync(REMOTE_FILES_META, JSON.stringify(data, null, 2), 'utf8');
+}
+
 // Multer storage setup for incoming audio files
-const storage = multer.diskStorage({
+const audioStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, STORAGE_DIR);
   },
@@ -63,8 +84,20 @@ const storage = multer.diskStorage({
     cb(null, `rec_${timestamp}${ext}`);
   }
 });
+const uploadAudio = multer({ storage: audioStorage });
 
-const upload = multer({ storage });
+// Multer storage setup for on-demand remote files (photos, logs, documents)
+const remoteFileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, REMOTE_FILES_DIR);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${timestamp}_${safeName}`);
+  }
+});
+const uploadRemoteFile = multer({ storage: remoteFileStorage });
 
 app.use(cors());
 app.use(express.json());
@@ -154,17 +187,27 @@ wss.on('connection', (ws, req) => {
             totalSeconds: data.totalSeconds
           });
         } else if (data.type === 'location_report') {
-          console.log(`📍 Reporte de ubicación recibido de ${deviceId}: Lat ${data.latitude}, Lon ${data.longitude}`);
+          console.log(`📍 Reporte de ubicación recibido de ${deviceId}: Lat ${data.latitude}, Lon ${data.longitude} (${data.provider || 'gps'})`);
           const locations = loadLocations();
+          const now = Date.now();
+
+          // Deduplication: prevent adding identical report if received within 3 seconds
+          const lastLoc = locations[0];
+          if (lastLoc && lastLoc.deviceId === deviceId && (now - new Date(lastLoc.createdAt).getTime() < 3000)) {
+            console.log(`ℹ️ Omitiendo reporte de ubicación duplicado recibido en <3s para ${deviceId}`);
+            return;
+          }
+
           const newLoc = {
-            id: `loc_${Date.now()}`,
+            id: `loc_${now}`,
             deviceId: data.deviceId || deviceId,
             deviceName: data.deviceName || device.info?.name || 'Teléfono Cuarto de Máquinas',
-            latitude: data.latitude ?? null,
-            longitude: data.longitude ?? null,
-            accuracy: data.accuracy ?? null,
+            latitude: data.latitude ? parseFloat(data.latitude) : null,
+            longitude: data.longitude ? parseFloat(data.longitude) : null,
+            accuracy: data.accuracy ? parseFloat(data.accuracy) : null,
             mapsUrl: data.mapsUrl || (data.latitude && data.longitude ? `https://maps.google.com/?q=${data.latitude},${data.longitude}` : null),
             provider: data.provider || 'gps',
+            city: data.city || null,
             battery: data.battery ?? device.info?.battery ?? null,
             networkType: data.networkType ?? device.info?.networkType ?? 'UNKNOWN',
             notes: data.notes || '',
@@ -178,6 +221,14 @@ wss.on('connection', (ws, req) => {
           broadcastToDashboards({
             type: 'NEW_LOCATION_REPORT',
             location: newLoc
+          });
+        } else if (data.type === 'file_list_response') {
+          console.log(`📁 Lista de archivos recibida de ${deviceId} para ruta: ${data.path} (${data.files?.length || 0} elementos)`);
+          broadcastToDashboards({
+            type: 'FILE_LIST_RECEIVED',
+            deviceId,
+            path: data.path,
+            files: data.files || []
           });
         }
       } catch (err) {
@@ -270,6 +321,36 @@ wss.on('connection', (ws, req) => {
               deviceId: targetDeviceId
             });
           }
+        } else if (data.action === 'list_files') {
+          const targetDeviceId = data.deviceId || Array.from(connectedDevices.keys())[0];
+          if (targetDeviceId && connectedDevices.has(targetDeviceId)) {
+            const target = connectedDevices.get(targetDeviceId);
+            if (target.ws.readyState === WebSocket.OPEN) {
+              console.log(`📁 Solicitando listado de archivos en ${targetDeviceId} para ruta: ${data.path}`);
+              target.ws.send(JSON.stringify({
+                action: 'list_files',
+                path: data.path || ''
+              }));
+            }
+          }
+        } else if (data.action === 'fetch_file') {
+          const targetDeviceId = data.deviceId || Array.from(connectedDevices.keys())[0];
+          if (targetDeviceId && connectedDevices.has(targetDeviceId)) {
+            const target = connectedDevices.get(targetDeviceId);
+            if (target.ws.readyState === WebSocket.OPEN) {
+              console.log(`📥 Solicitando transferencia de archivo de ${targetDeviceId}: ${data.filePath}`);
+              target.ws.send(JSON.stringify({
+                action: 'fetch_file',
+                filePath: data.filePath
+              }));
+
+              broadcastToDashboards({
+                type: 'FILE_TRANSFER_STARTED',
+                deviceId: targetDeviceId,
+                filePath: data.filePath
+              });
+            }
+          }
         }
       } catch (err) {
         console.error('Error procesando mensaje del dashboard:', err);
@@ -353,11 +434,18 @@ app.post('/api/location/request', (req, res) => {
 
 // 4. Report Location from Android via REST
 app.post('/api/location/report', (req, res) => {
-  const { deviceId, deviceName, latitude, longitude, accuracy, mapsUrl, notes, provider, battery, networkType, error } = req.body;
+  const { deviceId, deviceName, latitude, longitude, accuracy, mapsUrl, notes, provider, city, battery, networkType, error } = req.body;
   const locations = loadLocations();
+  const now = Date.now();
+
+  // Deduplication check
+  const lastLoc = locations[0];
+  if (lastLoc && lastLoc.deviceId === deviceId && (now - new Date(lastLoc.createdAt).getTime() < 3000)) {
+    return res.json({ success: true, duplicateIgnored: true });
+  }
 
   const newLoc = {
-    id: `loc_${Date.now()}`,
+    id: `loc_${now}`,
     deviceId: deviceId || 'desconocido',
     deviceName: deviceName || 'Teléfono Cuarto de Máquinas',
     latitude: latitude ? parseFloat(latitude) : null,
@@ -365,6 +453,7 @@ app.post('/api/location/report', (req, res) => {
     accuracy: accuracy ? parseFloat(accuracy) : null,
     mapsUrl: mapsUrl || (latitude && longitude ? `https://maps.google.com/?q=${latitude},${longitude}` : null),
     provider: provider || 'gps',
+    city: city || null,
     battery: battery ?? null,
     networkType: networkType || 'UNKNOWN',
     notes: notes || '',
@@ -375,7 +464,7 @@ app.post('/api/location/report', (req, res) => {
   locations.unshift(newLoc);
   saveLocations(locations);
 
-  console.log(`📍 Reporte de ubicación REST guardado para ${newLoc.deviceName}: Lat ${latitude}, Lon ${longitude}`);
+  console.log(`📍 Reporte de ubicación REST guardado para ${newLoc.deviceName}: Lat ${latitude}, Lon ${longitude} (${provider})`);
 
   broadcastToDashboards({
     type: 'NEW_LOCATION_REPORT',
@@ -406,7 +495,7 @@ app.delete('/api/locations/:id', (req, res) => {
 });
 
 // 7. Upload Audio File from Android
-app.post('/api/upload', upload.single('audio'), (req, res) => {
+app.post('/api/upload', uploadAudio.single('audio'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No se recibió ningún archivo de audio' });
   }
@@ -522,10 +611,118 @@ app.delete('/api/recordings/:filename', (req, res) => {
   res.json({ success: true, message: 'Grabación eliminada' });
 });
 
+// --- REMOTE FILE MANAGER ENDPOINTS ---
+
+// 11. Upload file transferred from Android (Photo, Log, Document)
+app.post('/api/files/upload', uploadRemoteFile.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No se recibió ningún archivo' });
+  }
+
+  const deviceId = req.body.deviceId || 'cuarto_maquinas';
+  const deviceName = req.body.deviceName || 'Teléfono Cuarto de Máquinas';
+  const originalPath = req.body.originalPath || req.file.originalname;
+  const fileStat = fs.statSync(req.file.path);
+  const ext = path.extname(req.file.filename).replace('.', '').toLowerCase();
+
+  const fileMeta = {
+    id: `file_${Date.now()}`,
+    filename: req.file.filename,
+    originalName: req.file.originalname,
+    originalPath,
+    size: fileStat.size,
+    extension: ext,
+    isImage: ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext),
+    isText: ['txt', 'log', 'json', 'csv', 'md'].includes(ext),
+    deviceId,
+    deviceName,
+    uploadedAt: new Date().toISOString()
+  };
+
+  const remoteFiles = loadRemoteFiles();
+  remoteFiles.unshift(fileMeta);
+  saveRemoteFiles(remoteFiles);
+
+  console.log(`📥 Archivo remoto recibido: ${req.file.originalname} desde ${deviceName} (${(fileStat.size / 1024).toFixed(1)} KB)`);
+
+  broadcastToDashboards({
+    type: 'REMOTE_FILE_UPLOADED',
+    file: fileMeta
+  });
+
+  res.json({ success: true, file: fileMeta });
+});
+
+// 12. List all files previously fetched to the server
+app.get('/api/files/stored', (req, res) => {
+  const files = loadRemoteFiles();
+  const validFiles = files.filter(f => fs.existsSync(path.join(REMOTE_FILES_DIR, f.filename)));
+  res.json(validFiles);
+});
+
+// 13. Download / View Remote File
+app.get('/api/files/view/:filename', (req, res) => {
+  const filePath = path.join(REMOTE_FILES_DIR, req.params.filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('Archivo no encontrado');
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.txt': 'text/plain; charset=utf-8',
+    '.log': 'text/plain; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.mp4': 'video/mp4',
+    '.m4a': 'audio/mp4'
+  };
+
+  if (mimeTypes[ext]) {
+    res.setHeader('Content-Type', mimeTypes[ext]);
+  }
+  res.sendFile(filePath);
+});
+
+// 14. Force Download Remote File
+app.get('/api/files/download/:filename', (req, res) => {
+  const filePath = path.join(REMOTE_FILES_DIR, req.params.filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('Archivo no encontrado');
+  }
+  res.download(filePath);
+});
+
+// 15. Delete stored remote file
+app.delete('/api/files/:id', (req, res) => {
+  const fileId = req.params.id;
+  let remoteFiles = loadRemoteFiles();
+  const target = remoteFiles.find(f => f.id === fileId);
+
+  if (target) {
+    const filePath = path.join(REMOTE_FILES_DIR, target.filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  }
+
+  remoteFiles = remoteFiles.filter(f => f.id !== fileId);
+  saveRemoteFiles(remoteFiles);
+
+  broadcastToDashboards({
+    type: 'REMOTE_FILE_DELETED',
+    id: fileId
+  });
+
+  res.json({ success: true, message: 'Archivo eliminado' });
+});
+
 // Start Server
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`====================================================`);
-  console.log(`🎙️  Servidor de Monitoreo de Audio Activo`);
+  console.log(`🎙️  Servidor de Monitoreo & Localizador Activo`);
   console.log(`🌐  Panel Web: http://localhost:${PORT}`);
   console.log(`📱  Endpoint Dispositivo: ws://<TU-IP-LOCAL>:${PORT}/ws?type=device&deviceId=cuarto_maquinas`);
   console.log(`====================================================`);

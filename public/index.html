@@ -116,15 +116,18 @@
         </div>
       </section>
 
-      <!-- Right Column: Tabbed View (Audio Recordings vs GPS Locations) -->
+      <!-- Right Column: Tabbed View (Audio Recordings vs GPS Locations vs File Explorer) -->
       <section class="card recordings-card">
         <div class="card-header-with-tabs">
           <div class="tabs-nav">
             <button type="button" class="tab-btn active" data-tab="tab-recordings" id="tab-btn-recordings">
-              🎙️ Grabaciones de Audio <span id="recordings-count-badge" class="tab-badge">0</span>
+              🎙️ Grabaciones <span id="recordings-count-badge" class="tab-badge">0</span>
             </button>
             <button type="button" class="tab-btn" data-tab="tab-locations" id="tab-btn-locations">
-              📍 Registro de Ubicaciones <span id="locations-count-badge" class="tab-badge">0</span>
+              📍 Ubicaciones <span id="locations-count-badge" class="tab-badge">0</span>
+            </button>
+            <button type="button" class="tab-btn" data-tab="tab-files" id="tab-btn-files">
+              📁 Explorador Remoto <span id="stored-files-count-badge" class="tab-badge">0</span>
             </button>
           </div>
           <button id="btn-refresh-list" class="btn btn-icon" title="Actualizar datos">
@@ -152,6 +155,64 @@
               <div class="empty-state">
                 <p>Aún no hay reportes de ubicación registrados.</p>
                 <small>Usa el botón "Solicitar Ubicación Actual" para consultar la posición del cuarto de máquinas en tiempo real.</small>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 3: REMOTE FILE MANAGER -->
+        <div id="tab-files" class="tab-content hidden">
+          <div class="file-manager-wrapper">
+            <!-- Quick Navigation Shortcuts -->
+            <div class="fm-shortcuts">
+              <span class="fm-label">Accesos Directos:</span>
+              <button type="button" class="btn-shortcut" data-path="camera">📷 Fotos Cámara (DCIM)</button>
+              <button type="button" class="btn-shortcut" data-path="logs">📋 Logs de la App</button>
+              <button type="button" class="btn-shortcut" data-path="internal">📂 Memoria Interna</button>
+              <button type="button" class="btn-shortcut" data-path="root">📁 Raíz (/sdcard)</button>
+            </div>
+
+            <!-- Path Navigation Bar -->
+            <div class="fm-path-bar">
+              <button id="btn-fm-up" class="btn btn-icon-sm" title="Subir un nivel">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 19V5M5 12l7-7 7 7"/>
+                </svg>
+              </button>
+              <div class="fm-path-input-group">
+                <span class="path-prefix">📱</span>
+                <input type="text" id="fm-current-path" value="camera" placeholder="Ruta en el teléfono (ej: camera, /sdcard/DCIM/Camera)">
+              </div>
+              <button id="btn-fm-go" class="btn btn-secondary-sm">Explorar</button>
+              <button id="btn-fm-refresh" class="btn btn-icon-sm" title="Recargar carpeta">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Live Phone Directory Browser -->
+            <div class="fm-section-title">
+              <span>Explorando en el Teléfono</span>
+              <span id="fm-loading-indicator" class="hidden"><span class="pulsing-dot"></span> Consultando dispositivo...</span>
+            </div>
+            <div id="fm-tree-container" class="fm-table-box">
+              <div class="empty-state">
+                <p>Haz clic en "📷 Fotos Cámara" o "Explorar" para ver los archivos del dispositivo.</p>
+                <small>Requiere que el teléfono Android esté conectado en línea.</small>
+              </div>
+            </div>
+
+            <!-- Stored / Downloaded Files on Server -->
+            <div class="fm-stored-section">
+              <div class="fm-section-title">
+                <span>Archivos Descargados en el Servidor</span>
+                <button id="btn-refresh-stored-files" class="btn btn-text-sm">↻ Actualizar</button>
+              </div>
+              <div id="stored-files-container" class="stored-files-box">
+                <div class="empty-state-sm">
+                  <p>No se han solicitado archivos aún.</p>
+                </div>
               </div>
             </div>
           </div>
@@ -202,6 +263,28 @@
         <button id="player-close-btn" class="btn btn-icon-sm" title="Cerrar reproductor">✕</button>
       </div>
       <audio id="global-audio-element" preload="none"></audio>
+    </div>
+
+    <!-- Preview Modal for Remote Photos & Text Logs -->
+    <div id="file-preview-modal" class="modal-overlay hidden">
+      <div class="modal-container">
+        <div class="modal-header">
+          <div class="modal-title-box">
+            <span id="modal-type-icon">🖼️</span>
+            <div>
+              <h3 id="modal-filename">Nombre del archivo</h3>
+              <small id="modal-filemeta">Detalles del archivo</small>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <a id="modal-download-btn" href="#" download class="btn btn-secondary-sm">⬇️ Descargar</a>
+            <button id="modal-close-btn" class="btn btn-icon-sm">✕</button>
+          </div>
+        </div>
+        <div class="modal-body" id="modal-body-content">
+          <!-- Populated dynamically: <img> or <pre><code> -->
+        </div>
+      </div>
     </div>
 
     <!-- Toast Notification Container -->
