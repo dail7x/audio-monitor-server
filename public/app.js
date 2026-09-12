@@ -1,16 +1,32 @@
 // Audio Monitor & Localizador Pro - Frontend Client Logic
 
+const TOKEN_STORAGE_KEY = 'audio_monitor_auth_token';
+
 let socket = null;
 let reconnectTimer = null;
 let currentDevices = [];
 let selectedDurationSeconds = 20;
 let activeRecordingTimer = null;
 
+// Pagination State
+let currentFmPath = 'camera';
+let currentFmPage = 1;
+let currentFmTotalPages = 1;
+let currentFmTotalFiles = 0;
+
 // Audio Player State
 const audioElement = document.getElementById('global-audio-element');
 let currentPlayingFile = null;
 
-// DOM Elements
+// DOM Elements - Auth & Header
+const loginOverlay = document.getElementById('login-overlay');
+const loginForm = document.getElementById('login-form');
+const loginPinInput = document.getElementById('login-pin-input');
+const btnTogglePinVisibility = document.getElementById('btn-toggle-pin-visibility');
+const loginErrorMsg = document.getElementById('login-error-msg');
+const btnSubmitLogin = document.getElementById('btn-submit-login');
+const btnLogout = document.getElementById('btn-logout');
+
 const serverWsStatus = document.getElementById('server-ws-status');
 const deviceCountBadge = document.getElementById('device-count-badge');
 const deviceCardContent = document.getElementById('device-card-content');
@@ -39,7 +55,7 @@ const storedFilesCountBadge = document.getElementById('stored-files-count-badge'
 const btnRefreshList = document.getElementById('btn-refresh-list');
 const toastContainer = document.getElementById('toast-container');
 
-// File Manager Elements
+// File Manager Elements & Pagination
 const fmCurrentPath = document.getElementById('fm-current-path');
 const btnFmGo = document.getElementById('btn-fm-go');
 const btnFmUp = document.getElementById('btn-fm-up');
@@ -49,6 +65,13 @@ const fmLoadingIndicator = document.getElementById('fm-loading-indicator');
 const storedFilesContainer = document.getElementById('stored-files-container');
 const btnRefreshStoredFiles = document.getElementById('btn-refresh-stored-files');
 const shortcutButtons = document.querySelectorAll('.btn-shortcut');
+
+const fmPaginationBar = document.getElementById('fm-pagination-bar');
+const btnFmPrev = document.getElementById('btn-fm-prev');
+const btnFmNext = document.getElementById('btn-fm-next');
+const fmCurrentPageNum = document.getElementById('fm-current-page-num');
+const fmTotalPagesNum = document.getElementById('fm-total-pages-num');
+const fmTotalFilesNum = document.getElementById('fm-total-files-num');
 
 // Modal Elements
 const filePreviewModal = document.getElementById('file-preview-modal');
@@ -83,13 +106,71 @@ const playerSpeedSelect = document.getElementById('player-speed-select');
 const playerDownloadBtn = document.getElementById('player-download-btn');
 const playerCloseBtn = document.getElementById('player-close-btn');
 
+// --- AUTHENTICATION HELPERS ---
+function getToken() {
+  return localStorage.getItem(TOKEN_STORAGE_KEY) || '';
+}
+
+function setToken(token) {
+  localStorage.setItem(TOKEN_STORAGE_KEY, token);
+}
+
+function removeToken() {
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+function showLoginScreen() {
+  if (loginOverlay) {
+    loginOverlay.classList.remove('hidden');
+    loginPinInput.value = '';
+    loginErrorMsg.classList.add('hidden');
+    setTimeout(() => loginPinInput.focus(), 100);
+  }
+}
+
+function hideLoginScreen() {
+  if (loginOverlay) {
+    loginOverlay.classList.add('hidden');
+    loginErrorMsg.classList.add('hidden');
+  }
+}
+
+async function authFetch(url, options = {}) {
+  const token = getToken();
+  options.headers = options.headers || {};
+  if (token) {
+    if (options.headers instanceof Headers) {
+      options.headers.set('Authorization', `Bearer ${token}`);
+    } else {
+      options.headers['Authorization'] = `Bearer ${token}`;
+    }
+  }
+
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    showLoginScreen();
+    throw new Error('Unauthorized');
+  }
+  return res;
+}
+
 // Initialize WebSockets
 function connectWebSocket() {
+  const token = getToken();
+  if (!token) {
+    showLoginScreen();
+    return;
+  }
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws?type=dashboard`;
+  const wsUrl = `${protocol}//${window.location.host}/ws?type=dashboard&token=${encodeURIComponent(token)}`;
 
   serverWsStatus.className = 'badge badge-ws connecting';
   serverWsStatus.innerHTML = '<span class="dot"></span><span class="label">Servidor: Conectando...</span>';
+
+  if (socket) {
+    try { socket.close(); } catch (e) {}
+  }
 
   socket = new WebSocket(wsUrl);
 
@@ -182,13 +263,17 @@ function handleServerMessage(data) {
       fetchLocations();
       break;
 
+    case 'AUTH_REQUIRED':
+      showLoginScreen();
+      break;
+
     case 'LOCATION_DELETED':
       fetchLocations();
       break;
 
     case 'FILE_LIST_RECEIVED':
       fmLoadingIndicator.classList.add('hidden');
-      renderLiveFileList(data.path, data.files || []);
+      renderLiveFileList(data.path, data.files || [], data.page || 1, data.totalPages || 1, data.totalFiles || (data.files?.length || 0));
       break;
 
     case 'FILE_TRANSFER_STARTED':
@@ -467,7 +552,7 @@ tabBtnFiles.addEventListener('click', () => switchTab('tab-files'));
 // Fetch and Render Audio Recordings
 async function fetchRecordings() {
   try {
-    const res = await fetch('/api/recordings');
+    const res = await authFetch('/api/recordings');
     const data = await res.json();
     renderRecordings(data);
   } catch (err) {
@@ -488,6 +573,7 @@ function renderRecordings(recordings) {
     return;
   }
 
+  const token = encodeURIComponent(getToken());
   let html = '';
   recordings.forEach(rec => {
     const dateObj = new Date(rec.createdAt);
@@ -528,17 +614,17 @@ function renderRecordings(recordings) {
         </div>
 
         <div class="recording-actions">
-          <button class="btn btn-play-item" onclick="playAudioTrack('${rec.filename}', '${dateFormatted} ${timeFormatted}')" title="Reproducir audio">
+          <button class="btn btn-play-item" onclick="playAudioTrack('${escapeJsString(rec.filename)}', '${dateFormatted} ${timeFormatted}')" title="Reproducir audio">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
           </button>
-          <a href="/api/recordings/${rec.filename}" download="${rec.filename}" class="btn btn-icon-sm" title="Descargar archivo .m4a">
+          <a href="/api/recordings/${encodeURIComponent(rec.filename)}?token=${token}" download="${rec.filename}" class="btn btn-icon-sm" title="Descargar archivo .m4a">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
           </a>
-          <button class="btn btn-delete-item" onclick="deleteAudioFile('${rec.filename}')" title="Eliminar grabación">
+          <button class="btn btn-delete-item" onclick="deleteAudioFile('${escapeJsString(rec.filename)}')" title="Eliminar grabación">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"/>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -555,7 +641,7 @@ function renderRecordings(recordings) {
 // Fetch and Render GPS Locations
 async function fetchLocations() {
   try {
-    const res = await fetch('/api/locations');
+    const res = await authFetch('/api/locations');
     const data = await res.json();
     renderLocations(data);
   } catch (err) {
@@ -648,7 +734,7 @@ window.deleteLocationRecord = async function(id) {
   if (!confirm('¿Deseas eliminar este registro de ubicación?')) return;
 
   try {
-    const res = await fetch(`/api/locations/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/locations/${id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchLocations();
     }
@@ -660,12 +746,13 @@ window.deleteLocationRecord = async function(id) {
 // Global Audio Player Management
 window.playAudioTrack = function(filename, dateStr) {
   currentPlayingFile = filename;
+  const token = encodeURIComponent(getToken());
   playerTitle.textContent = filename;
   playerDate.textContent = dateStr;
-  playerDownloadBtn.href = `/api/recordings/${filename}`;
+  playerDownloadBtn.href = `/api/recordings/${encodeURIComponent(filename)}?token=${token}`;
   playerDownloadBtn.download = filename;
 
-  audioElement.src = `/api/recordings/${filename}`;
+  audioElement.src = `/api/recordings/${encodeURIComponent(filename)}?token=${token}`;
   audioElement.playbackRate = parseFloat(playerSpeedSelect.value);
   audioElement.play();
 
@@ -678,7 +765,7 @@ window.deleteAudioFile = async function(filename) {
   if (!confirm(`¿Estás seguro de eliminar "${filename}"?`)) return;
 
   try {
-    const res = await fetch(`/api/recordings/${filename}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/recordings/${encodeURIComponent(filename)}`, { method: 'DELETE' });
     if (res.ok) {
       if (currentPlayingFile === filename) {
         audioElement.pause();
@@ -744,21 +831,24 @@ btnRefreshList.addEventListener('click', () => {
 });
 
 // ==========================================================================
-// Remote File Explorer Logic
+// Remote File Explorer Logic (With Pagination)
 // ==========================================================================
 
-// Request live folder list from connected Android device
-function requestLiveFileList(path) {
+// Request live folder list from connected Android device with pagination
+function requestLiveFileList(path, page = 1) {
   if (currentDevices.length === 0) {
     alert('No hay ningún teléfono conectado para consultar archivos.');
     return;
   }
 
+  currentFmPath = path || 'camera';
+  currentFmPage = Math.max(1, parseInt(page, 10) || 1);
+
   fmLoadingIndicator.classList.remove('hidden');
   fmTreeContainer.innerHTML = `
     <div class="empty-state">
       <div class="pulsing-spinner"></div>
-      <p>Cargando lista de archivos desde el teléfono...</p>
+      <p>Cargando archivos desde el teléfono (Pág. ${currentFmPage})...</p>
     </div>
   `;
 
@@ -766,7 +856,9 @@ function requestLiveFileList(path) {
     socket.send(JSON.stringify({
       action: 'list_files',
       deviceId: currentDevices[0]?.id,
-      path: path || ''
+      path: currentFmPath,
+      page: currentFmPage,
+      pageSize: 30
     }));
   }
 }
@@ -789,17 +881,23 @@ function requestFileTransfer(filePath) {
   }
 }
 
-// Render Live Directory Items from Phone
-function renderLiveFileList(currentPath, files) {
-  fmCurrentPath.value = currentPath || '';
+// Render Live Directory Items from Phone with Pagination controls
+function renderLiveFileList(currentPath, files, page = 1, totalPages = 1, totalFiles = 0) {
+  currentFmPath = currentPath || '';
+  currentFmPage = page;
+  currentFmTotalPages = Math.max(1, totalPages);
+  currentFmTotalFiles = totalFiles || (files ? files.length : 0);
+
+  fmCurrentPath.value = currentFmPath;
 
   if (!files || files.length === 0) {
     fmTreeContainer.innerHTML = `
       <div class="empty-state">
         <p>Carpeta vacía o sin archivos accesibles en esta ruta.</p>
-        <small>Ruta: ${escapeHtml(currentPath)}</small>
+        <small>Ruta: ${escapeHtml(currentFmPath)}</small>
       </div>
     `;
+    fmPaginationBar.classList.add('hidden');
     return;
   }
 
@@ -840,32 +938,57 @@ function renderLiveFileList(currentPath, files) {
   });
 
   fmTreeContainer.innerHTML = html;
+
+  // Update Pagination Controls
+  if (currentFmTotalPages > 1 || currentFmTotalFiles > 0) {
+    fmPaginationBar.classList.remove('hidden');
+    fmCurrentPageNum.textContent = currentFmPage;
+    fmTotalPagesNum.textContent = currentFmTotalPages;
+    fmTotalFilesNum.textContent = `(${currentFmTotalFiles} archivos)`;
+    btnFmPrev.disabled = currentFmPage <= 1;
+    btnFmNext.disabled = currentFmPage >= currentFmTotalPages;
+  } else {
+    fmPaginationBar.classList.add('hidden');
+  }
 }
+
+// Pagination button click listeners
+btnFmPrev.addEventListener('click', () => {
+  if (currentFmPage > 1) {
+    requestLiveFileList(currentFmPath, currentFmPage - 1);
+  }
+});
+
+btnFmNext.addEventListener('click', () => {
+  if (currentFmPage < currentFmTotalPages) {
+    requestLiveFileList(currentFmPath, currentFmPage + 1);
+  }
+});
 
 window.browseToPath = function(path) {
   fmCurrentPath.value = path;
-  requestLiveFileList(path);
+  requestLiveFileList(path, 1);
 };
 
 // Path navigation buttons
 btnFmGo.addEventListener('click', () => {
-  requestLiveFileList(fmCurrentPath.value.trim());
+  requestLiveFileList(fmCurrentPath.value.trim(), 1);
 });
 
 fmCurrentPath.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
-    requestLiveFileList(fmCurrentPath.value.trim());
+    requestLiveFileList(fmCurrentPath.value.trim(), 1);
   }
 });
 
 btnFmRefresh.addEventListener('click', () => {
-  requestLiveFileList(fmCurrentPath.value.trim());
+  requestLiveFileList(fmCurrentPath.value.trim(), currentFmPage);
 });
 
 btnFmUp.addEventListener('click', () => {
   let cur = fmCurrentPath.value.trim();
   if (cur === 'camera' || cur === 'logs' || cur === 'internal' || cur === 'root' || cur === '/' || cur === '/sdcard') {
-    requestLiveFileList('internal');
+    requestLiveFileList('internal', 1);
     return;
   }
   const parts = cur.replace(/\/$/, '').split('/');
@@ -873,7 +996,7 @@ btnFmUp.addEventListener('click', () => {
     parts.pop();
     const upPath = parts.join('/') || '/';
     fmCurrentPath.value = upPath;
-    requestLiveFileList(upPath);
+    requestLiveFileList(upPath, 1);
   }
 });
 
@@ -881,7 +1004,7 @@ shortcutButtons.forEach(btn => {
   btn.addEventListener('click', () => {
     const p = btn.getAttribute('data-path');
     fmCurrentPath.value = p;
-    requestLiveFileList(p);
+    requestLiveFileList(p, 1);
   });
 });
 
@@ -891,7 +1014,7 @@ shortcutButtons.forEach(btn => {
 
 async function fetchStoredFiles() {
   try {
-    const res = await fetch('/api/files/stored');
+    const res = await authFetch('/api/files/stored');
     const files = await res.json();
     renderStoredFiles(files);
   } catch (err) {
@@ -912,6 +1035,7 @@ function renderStoredFiles(files) {
     return;
   }
 
+  const token = encodeURIComponent(getToken());
   let html = '';
   files.forEach(f => {
     const isImage = f.isImage || /\.(jpg|jpeg|png|webp|gif)$/i.test(f.filename);
@@ -934,7 +1058,7 @@ function renderStoredFiles(files) {
           <button class="btn btn-secondary-sm" onclick='openFilePreview(${JSON.stringify(f)})'>
             👁️ Ver
           </button>
-          <a href="/api/files/download/${f.filename}" download="${f.originalName}" class="btn btn-icon-sm" title="Descargar archivo">
+          <a href="/api/files/download/${encodeURIComponent(f.filename)}?token=${token}" download="${f.originalName}" class="btn btn-icon-sm" title="Descargar archivo">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
@@ -961,7 +1085,7 @@ window.deleteStoredFile = async function(id) {
   if (!confirm('¿Deseas eliminar este archivo descargado del servidor?')) return;
 
   try {
-    const res = await fetch(`/api/files/${id}`, { method: 'DELETE' });
+    const res = await authFetch(`/api/files/${id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchStoredFiles();
     }
@@ -975,10 +1099,11 @@ window.deleteStoredFile = async function(id) {
 // ==========================================================================
 
 window.openFilePreview = async function(file) {
+  const token = encodeURIComponent(getToken());
   modalFilename.textContent = file.originalName || file.filename;
   const sizeStr = formatBytes(file.size || 0);
   modalFilemeta.textContent = `${sizeStr} • Dispositivo: ${file.deviceName || 'Android'} • ${file.remotePath || ''}`;
-  modalDownloadBtn.href = `/api/files/download/${file.filename}`;
+  modalDownloadBtn.href = `/api/files/download/${encodeURIComponent(file.filename)}?token=${token}`;
   modalDownloadBtn.download = file.originalName || file.filename;
 
   const isImage = file.isImage || /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(file.filename || file.originalName);
@@ -987,13 +1112,13 @@ window.openFilePreview = async function(file) {
   if (isImage) {
     modalTypeIcon.textContent = '🖼️';
     modalBodyContent.innerHTML = `
-      <img src="/api/files/view/${file.filename}" alt="${escapeHtml(file.originalName)}" class="modal-preview-img" />
+      <img src="/api/files/view/${encodeURIComponent(file.filename)}?token=${token}" alt="${escapeHtml(file.originalName)}" class="modal-preview-img" />
     `;
     filePreviewModal.classList.remove('hidden');
   } else if (isAudio) {
     modalTypeIcon.textContent = '🎵';
     modalBodyContent.innerHTML = `
-      <audio controls autoplay src="/api/files/view/${file.filename}" style="width: 100%; max-width: 500px;"></audio>
+      <audio controls autoplay src="/api/files/view/${encodeURIComponent(file.filename)}?token=${token}" style="width: 100%; max-width: 500px;"></audio>
     `;
     filePreviewModal.classList.remove('hidden');
   } else {
@@ -1003,7 +1128,7 @@ window.openFilePreview = async function(file) {
     filePreviewModal.classList.remove('hidden');
 
     try {
-      const res = await fetch(`/api/files/view/${file.filename}`);
+      const res = await authFetch(`/api/files/view/${encodeURIComponent(file.filename)}`);
       const text = await res.text();
       modalBodyContent.innerHTML = `
         <pre class="modal-preview-text"><code>${escapeHtml(text)}</code></pre>
@@ -1077,8 +1202,108 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// Initial Launch
-connectWebSocket();
-fetchRecordings();
-fetchLocations();
-fetchStoredFiles();
+// ==========================================================================
+// Authentication UI Logic & App Init
+// ==========================================================================
+
+btnTogglePinVisibility.addEventListener('click', () => {
+  if (loginPinInput.type === 'password') {
+    loginPinInput.type = 'text';
+    btnTogglePinVisibility.textContent = '🔒';
+  } else {
+    loginPinInput.type = 'password';
+    btnTogglePinVisibility.textContent = '👁️';
+  }
+});
+
+async function handleLoginSubmit(e) {
+  if (e) e.preventDefault();
+  const pin = loginPinInput.value.trim();
+  if (!pin) {
+    loginErrorMsg.textContent = '⚠️ Ingresa el PIN de acceso';
+    loginErrorMsg.classList.remove('hidden');
+    return;
+  }
+
+  btnSubmitLogin.disabled = true;
+  btnSubmitLogin.innerHTML = '<span class="pulsing-spinner"></span> Validando...';
+
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
+    });
+    const data = await res.json();
+
+    if (res.ok && data.success && data.token) {
+      setToken(data.token);
+      hideLoginScreen();
+      initDashboard();
+      showToast('🔓 Panel de control desbloqueado', 'success');
+    } else {
+      loginErrorMsg.textContent = `⚠️ ${data.error || 'PIN incorrecto'}`;
+      loginErrorMsg.classList.remove('hidden');
+      loginPinInput.value = '';
+      loginPinInput.focus();
+    }
+  } catch (err) {
+    loginErrorMsg.textContent = '⚠️ Error conectando al servidor';
+    loginErrorMsg.classList.remove('hidden');
+  } finally {
+    btnSubmitLogin.disabled = false;
+    btnSubmitLogin.innerHTML = `
+      <span>Desbloquear Panel</span>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="9 18 15 12 9 6"/>
+      </svg>
+    `;
+  }
+}
+
+loginForm.addEventListener('submit', handleLoginSubmit);
+
+function handleLogout() {
+  if (!confirm('¿Deseas bloquear el panel de administración?')) return;
+  removeToken();
+  if (socket) {
+    try { socket.close(); } catch (e) {}
+  }
+  showLoginScreen();
+}
+
+btnLogout.addEventListener('click', handleLogout);
+
+function initDashboard() {
+  connectWebSocket();
+  fetchRecordings();
+  fetchLocations();
+  fetchStoredFiles();
+}
+
+async function checkAuthAndInit() {
+  const token = getToken();
+  if (!token) {
+    showLoginScreen();
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/auth/check', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (res.ok) {
+      hideLoginScreen();
+      initDashboard();
+    } else {
+      removeToken();
+      showLoginScreen();
+    }
+  } catch (err) {
+    console.warn('No se pudo verificar token:', err);
+    showLoginScreen();
+  }
+}
+
+// Start application
+checkAuthAndInit();

