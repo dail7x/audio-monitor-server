@@ -11,13 +11,17 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
-const STORAGE_DIR = path.join(__dirname, 'storage', 'recordings');
-const REMOTE_FILES_DIR = path.join(__dirname, 'storage', 'remote_files');
-const DB_FILE = path.join(__dirname, 'storage', 'metadata.json');
-const LOCATIONS_FILE = path.join(__dirname, 'storage', 'locations.json');
-const REMOTE_FILES_META = path.join(__dirname, 'storage', 'remote_files.json');
+const BASE_STORAGE = process.env.DATA_DIR || path.join(__dirname, 'storage');
+const STORAGE_DIR = path.join(BASE_STORAGE, 'recordings');
+const REMOTE_FILES_DIR = path.join(BASE_STORAGE, 'remote_files');
+const DB_FILE = path.join(BASE_STORAGE, 'metadata.json');
+const LOCATIONS_FILE = path.join(BASE_STORAGE, 'locations.json');
+const REMOTE_FILES_META = path.join(BASE_STORAGE, 'remote_files.json');
 
 // Ensure storage directories exist
+if (!fs.existsSync(BASE_STORAGE)) {
+  fs.mkdirSync(BASE_STORAGE, { recursive: true });
+}
 if (!fs.existsSync(STORAGE_DIR)) {
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
 }
@@ -273,30 +277,61 @@ wss.on('connection', (ws, req) => {
           }
 
           const target = connectedDevices.get(targetDeviceId);
+          target.recordingQueue = target.recordingQueue || [];
+          const mode = data.mode || 'queue'; // 'queue' | 'override'
+
           if (target.ws.readyState === WebSocket.OPEN) {
-            console.log(`🎙️ Enviando orden de grabación a ${targetDeviceId} por ${durationSeconds} segundos...`);
-            target.ws.send(JSON.stringify({
-              action: 'record',
-              durationSeconds: durationSeconds,
-              recordId: `rec_${Date.now()}`
-            }));
+            if (target.info.status === 'recording' && mode !== 'override') {
+              // Queue recording
+              const recordId = `rec_${Date.now()}`;
+              target.recordingQueue.push({ durationSeconds, recordId, queuedAt: Date.now() });
+              console.log(`⏳ Grabación de ${durationSeconds}s encolada para ${targetDeviceId}. Cola: ${target.recordingQueue.length}`);
+              broadcastToDashboards({
+                type: 'RECORDING_QUEUED',
+                deviceId: targetDeviceId,
+                durationSeconds,
+                queueLength: target.recordingQueue.length
+              });
+            } else {
+              // Start or Override
+              if (target.info.status === 'recording') {
+                target.ws.send(JSON.stringify({ action: 'cancel' }));
+              }
 
-            target.info.status = 'recording';
-            target.info.activeRecording = { durationSeconds, startedAt: Date.now() };
+              setTimeout(() => {
+                console.log(`🎙️ Enviando orden de grabación a ${targetDeviceId} por ${durationSeconds} segundos (mode: ${mode})...`);
+                target.ws.send(JSON.stringify({
+                  action: 'record',
+                  durationSeconds: durationSeconds,
+                  recordId: `rec_${Date.now()}`
+                }));
 
-            broadcastToDashboards({
-              type: 'RECORDING_STARTED',
-              deviceId: targetDeviceId,
-              durationSeconds
-            });
+                target.info.status = 'recording';
+                target.info.activeRecording = { durationSeconds, startedAt: Date.now() };
+
+                broadcastToDashboards({
+                  type: 'RECORDING_STARTED',
+                  deviceId: targetDeviceId,
+                  durationSeconds,
+                  queueLength: target.recordingQueue.length
+                });
+              }, target.info.status === 'recording' ? 300 : 0);
+            }
           }
         } else if (data.action === 'cancel_record') {
           const targetDeviceId = data.deviceId || Array.from(connectedDevices.keys())[0];
           if (targetDeviceId && connectedDevices.has(targetDeviceId)) {
             const target = connectedDevices.get(targetDeviceId);
+            target.recordingQueue = []; // Clear queue on manual cancel
+            target.info.status = 'idle';
+            target.info.activeRecording = null;
             if (target.ws.readyState === WebSocket.OPEN) {
               target.ws.send(JSON.stringify({ action: 'cancel' }));
             }
+            broadcastToDashboards({
+              type: 'RECORDING_CANCELLED',
+              deviceId: targetDeviceId
+            });
           }
         } else if (data.action === 'request_location') {
           const targetDeviceId = data.deviceId || Array.from(connectedDevices.keys())[0];
@@ -540,6 +575,37 @@ app.post('/api/upload', uploadAudio.single('audio'), (req, res) => {
     type: 'NEW_RECORDING',
     recording: newRecord
   });
+
+  // Check if there are queued recordings for this device
+  if (deviceId && connectedDevices.has(deviceId)) {
+    const target = connectedDevices.get(deviceId);
+    target.info.status = 'idle';
+    target.info.activeRecording = null;
+    target.recordingQueue = target.recordingQueue || [];
+
+    if (target.recordingQueue.length > 0) {
+      const next = target.recordingQueue.shift();
+      console.log(`🚀 Ejecutando grabación encolada (${next.durationSeconds}s) para ${deviceId}...`);
+      setTimeout(() => {
+        if (target.ws && target.ws.readyState === WebSocket.OPEN) {
+          target.info.status = 'recording';
+          target.info.activeRecording = { durationSeconds: next.durationSeconds, startedAt: Date.now() };
+          target.ws.send(JSON.stringify({
+            action: 'record',
+            durationSeconds: next.durationSeconds,
+            recordId: next.recordId
+          }));
+          broadcastToDashboards({
+            type: 'RECORDING_STARTED',
+            deviceId: deviceId,
+            durationSeconds: next.durationSeconds,
+            fromQueue: true,
+            queueLength: target.recordingQueue.length
+          });
+        }
+      }, 800);
+    }
+  }
 
   res.json({
     success: true,

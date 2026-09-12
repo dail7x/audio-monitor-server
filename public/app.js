@@ -59,6 +59,16 @@ const modalCloseBtn = document.getElementById('modal-close-btn');
 const modalBodyContent = document.getElementById('modal-body-content');
 const modalTypeIcon = document.getElementById('modal-type-icon');
 
+// Conflict Modal & Queue Elements
+const recordingQueueBadge = document.getElementById('recording-queue-badge');
+const recordConflictModal = document.getElementById('record-conflict-modal');
+const conflictModalStatus = document.getElementById('conflict-modal-status');
+const btnCloseConflictModal = document.getElementById('btn-close-conflict-modal');
+const btnActionQueue = document.getElementById('btn-action-queue');
+const btnActionOverride = document.getElementById('btn-action-override');
+const btnActionCancel = document.getElementById('btn-action-cancel');
+let pendingRecordingDuration = null;
+
 // Floating Player Elements
 const floatingPlayer = document.getElementById('floating-player');
 const playerTitle = document.getElementById('player-title');
@@ -130,6 +140,23 @@ function handleServerMessage(data) {
 
     case 'RECORDING_STARTED':
       startLocalRecordingCountdown(data.durationSeconds);
+      if (data.queueLength !== undefined) {
+        updateQueueBadgeUI(data.queueLength);
+      }
+      if (data.fromQueue) {
+        showToast(`🚀 Iniciando grabación encolada (${data.durationSeconds}s)`, 'info');
+      }
+      break;
+
+    case 'RECORDING_QUEUED':
+      showToast(`⏳ Grabación de ${data.durationSeconds}s encolada (Posición #${data.queueLength})`, 'info');
+      updateQueueBadgeUI(data.queueLength);
+      break;
+
+    case 'RECORDING_CANCELLED':
+      stopLocalRecordingCountdown();
+      updateQueueBadgeUI(0);
+      showToast('🛑 Grabación cancelada', 'info');
       break;
 
     case 'RECORDING_PROGRESS':
@@ -205,8 +232,8 @@ function updateDeviceStatusUI(devices) {
   }
 
   const primaryDevice = devices[0];
-  const isRecording = primaryDevice.status === 'recording';
-  btnStartRecord.disabled = isRecording;
+  const isRecording = primaryDevice.status === 'recording' || activeRecordingTimer !== null;
+  btnStartRecord.disabled = false;
   btnRequestLocation.disabled = false;
 
   const batteryPct = primaryDevice.battery !== null ? `${primaryDevice.battery}%` : 'N/A';
@@ -242,8 +269,6 @@ function updateDeviceStatusUI(devices) {
   if (isRecording && !activeRecordingTimer) {
     const duration = primaryDevice.activeRecording?.durationSeconds || selectedDurationSeconds;
     startLocalRecordingCountdown(duration);
-  } else if (!isRecording && activeRecordingTimer) {
-    stopLocalRecordingCountdown();
   }
 }
 
@@ -268,8 +293,7 @@ customDurationInput.addEventListener('input', () => {
   selectedDurationSeconds = parseInt(customDurationInput.value, 10) || 30;
 });
 
-// Start Recording Trigger (Audio + GPS)
-btnStartRecord.addEventListener('click', () => {
+function sendRecordCommand(durationSeconds, mode = 'queue') {
   if (currentDevices.length === 0) {
     alert('No hay ningún teléfono Android conectado.');
     return;
@@ -277,12 +301,66 @@ btnStartRecord.addEventListener('click', () => {
 
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
-      action: 'trigger_record',
-      durationSeconds: selectedDurationSeconds,
-      deviceId: currentDevices[0].id
+      action: 'record',
+      durationSeconds: durationSeconds,
+      mode: mode,
+      deviceId: currentDevices[0]?.id
     }));
   }
+}
+
+// Start Recording Trigger (Audio + GPS)
+btnStartRecord.addEventListener('click', () => {
+  if (currentDevices.length === 0) {
+    alert('No hay ningún teléfono Android conectado.');
+    return;
+  }
+
+  // If a recording is currently running, prompt with conflict modal!
+  if (activeRecordingTimer !== null) {
+    pendingRecordingDuration = selectedDurationSeconds;
+    conflictModalStatus.textContent = `Nueva orden de ${selectedDurationSeconds} seg`;
+    recordConflictModal.classList.remove('hidden');
+    return;
+  }
+
+  sendRecordCommand(selectedDurationSeconds, 'queue');
 });
+
+// Conflict Modal Actions
+btnActionQueue.addEventListener('click', () => {
+  recordConflictModal.classList.add('hidden');
+  if (pendingRecordingDuration) {
+    sendRecordCommand(pendingRecordingDuration, 'queue');
+    showToast(`⏳ Grabación de ${pendingRecordingDuration}s agregada a la cola`, 'info');
+  }
+});
+
+btnActionOverride.addEventListener('click', () => {
+  recordConflictModal.classList.add('hidden');
+  if (pendingRecordingDuration) {
+    sendRecordCommand(pendingRecordingDuration, 'override');
+    showToast(`⏹️ Interrumpiendo grabación para iniciar nueva (${pendingRecordingDuration}s)...`, 'info');
+  }
+});
+
+btnActionCancel.addEventListener('click', () => {
+  recordConflictModal.classList.add('hidden');
+});
+
+btnCloseConflictModal.addEventListener('click', () => {
+  recordConflictModal.classList.add('hidden');
+});
+
+function updateQueueBadgeUI(queueLength) {
+  if (!recordingQueueBadge) return;
+  if (queueLength > 0) {
+    recordingQueueBadge.textContent = `⏳ ${queueLength} grabación${queueLength > 1 ? 'es' : ''} pendiente${queueLength > 1 ? 's' : ''} en cola`;
+    recordingQueueBadge.classList.remove('hidden');
+  } else {
+    recordingQueueBadge.classList.add('hidden');
+  }
+}
 
 // Location Only Trigger Button (No Audio)
 btnRequestLocation.addEventListener('click', () => {
@@ -306,7 +384,7 @@ btnRequestLocation.addEventListener('click', () => {
 
 // Cancel Recording Trigger
 btnCancelRecording.addEventListener('click', () => {
-  if (confirm('¿Deseas detener la grabación inmediatamente?')) {
+  if (confirm('¿Deseas detener la grabación y limpiar la cola?')) {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({
         action: 'cancel_record',
@@ -314,6 +392,7 @@ btnCancelRecording.addEventListener('click', () => {
       }));
     }
     stopLocalRecordingCountdown();
+    updateQueueBadgeUI(0);
   }
 });
 

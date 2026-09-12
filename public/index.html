@@ -94,6 +94,9 @@
             <div class="progress-bar-bg">
               <div id="recording-progress-fill" class="progress-bar-fill" style="width: 0%"></div>
             </div>
+            <div id="recording-queue-badge" class="queue-status-tag hidden">
+              ⏳ 1 grabación pendiente en cola
+            </div>
             <button id="btn-cancel-recording" class="btn btn-cancel-sm">Detener Ahora</button>
           </div>
 
@@ -285,6 +288,40 @@
         </div>
         <div class="modal-body" id="modal-body-content">
           <!-- Populated dynamically: <img> or <pre><code> -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Conflict Modal for Concurrent Recordings -->
+    <div id="record-conflict-modal" class="modal-overlay hidden">
+      <div class="modal-container modal-sm">
+        <div class="modal-header">
+          <div class="modal-title-box">
+            <span style="font-size: 1.4rem;">⚠️</span>
+            <div>
+              <h3>Grabación en Curso</h3>
+              <small id="conflict-modal-status">El teléfono está grabando audio actualmente</small>
+            </div>
+          </div>
+          <button id="btn-close-conflict-modal" class="btn btn-icon-sm">✕</button>
+        </div>
+        <div class="modal-body modal-body-col">
+          <p id="conflict-modal-desc" style="color: var(--text-main); margin-bottom: 16px; font-size: 0.95rem;">
+            Ya hay una grabación activa en el dispositivo. ¿Qué deseas hacer con la nueva solicitud?
+          </p>
+          <div class="conflict-actions-stack">
+            <button id="btn-action-queue" class="btn btn-primary btn-queue-action">
+              <strong>⏳ Encolar Grabación</strong>
+              <small>Esperar a que termine la grabación actual y comenzar esta automáticamente.</small>
+            </button>
+            <button id="btn-action-override" class="btn btn-danger btn-override-action">
+              <strong>⏹️ Detener Actual e Iniciar Esta</strong>
+              <small>Interrumpir la grabación actual y comenzar la nueva de inmediato.</small>
+            </button>
+            <button id="btn-action-cancel" class="btn btn-secondary-sm" style="margin-top: 6px;">
+              Cancelar Solicitud
+            </button>
+          </div>
         </div>
       </div>
     </div>

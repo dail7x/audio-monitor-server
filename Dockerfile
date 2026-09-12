@@ -7,8 +7,11 @@ RUN npm install --production
 
 COPY . .
 
-# Create directory for persistent recordings storage
-RUN mkdir -p storage/recordings
+# Create directory for persistent recordings & remote files storage
+RUN mkdir -p storage/recordings storage/remote_files
+
+# Declare persistent storage volume
+VOLUME ["/app/storage"]
 
 ENV PORT=3000
 EXPOSE 3000
