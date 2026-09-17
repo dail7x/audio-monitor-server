@@ -123,6 +123,28 @@
             </svg>
             <span>📍 Solicitar Ubicación Actual (Sin Audio)</span>
           </button>
+
+          <!-- Remote Configuration & APK Download Box -->
+          <div class="remote-config-box" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);">
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+              <button id="btn-toggle-remote-config" class="btn btn-outline" style="flex: 1; font-size: 0.78rem; padding: 7px; border-color: rgba(255,255,255,0.15);">
+                ⚙️ Cambiar Servidor Remoto
+              </button>
+              <a href="/audio-monitor.apk" download="audio-monitor.apk" class="btn btn-outline" style="font-size: 0.78rem; padding: 7px 10px; text-decoration: none; border-color: rgba(255,255,255,0.15); display: flex; align-items: center; gap: 4px;" title="Descargar APK actualizado">
+                📲 APK
+              </a>
+            </div>
+
+            <div id="remote-config-panel" class="hidden" style="margin-top: 8px; background: rgba(15, 23, 42, 0.7); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
+              <label style="font-size: 0.75rem; color: #94A3B8; display: block; margin-bottom: 5px; font-weight: 500;">
+                Nueva URL del Servidor en el Teléfono:
+              </label>
+              <input id="input-new-server-url" type="url" value="https://audio-monitor.venezuelajuntos.online" style="width: 100%; box-sizing: border-box; padding: 7px 9px; font-size: 0.8rem; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #fff; margin-bottom: 8px;" />
+              <button id="btn-send-server-url" class="btn btn-primary" style="width: 100%; font-size: 0.78rem; padding: 7px; background: #2563EB;">
+                🚀 Enviar Orden al Teléfono
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 

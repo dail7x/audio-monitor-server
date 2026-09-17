@@ -1305,5 +1305,52 @@ async function checkAuthAndInit() {
   }
 }
 
+// Remote Server URL Configuration Handlers
+const btnToggleRemoteConfig = document.getElementById('btn-toggle-remote-config');
+const remoteConfigPanel = document.getElementById('remote-config-panel');
+const inputNewServerUrl = document.getElementById('input-new-server-url');
+const btnSendServerUrl = document.getElementById('btn-send-server-url');
+
+if (btnToggleRemoteConfig && remoteConfigPanel) {
+  btnToggleRemoteConfig.addEventListener('click', () => {
+    remoteConfigPanel.classList.toggle('hidden');
+    if (!remoteConfigPanel.classList.contains('hidden') && inputNewServerUrl) {
+      inputNewServerUrl.focus();
+    }
+  });
+}
+
+if (btnSendServerUrl && inputNewServerUrl) {
+  btnSendServerUrl.addEventListener('click', () => {
+    const newUrl = inputNewServerUrl.value.trim();
+    if (!newUrl || (!newUrl.startsWith('http://') && !newUrl.startsWith('https://'))) {
+      showToast('Ingresa una URL válida (ej: https://audio-monitor.venezuelajuntos.online)', 'error');
+      return;
+    }
+
+    if (!currentDevices.length) {
+      showToast('No hay ningún teléfono conectado para recibir la orden.', 'warning');
+      return;
+    }
+
+    const dev = currentDevices[0];
+    if (!confirm(`¿Confirmas enviar la orden a "${dev.name || dev.id}" para cambiar su servidor a:\n\n${newUrl}\n\nEl teléfono guardará la configuración y se reconectará de inmediato.`)) {
+      return;
+    }
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        action: 'update_server_url',
+        deviceId: dev.id,
+        newUrl: newUrl
+      }));
+      showToast(`🚀 Orden enviada: Cambiando servidor a ${newUrl}`, 'info');
+      remoteConfigPanel.classList.add('hidden');
+    } else {
+      showToast('No hay conexión WebSocket con el servidor.', 'error');
+    }
+  });
+}
+
 // Start application
 checkAuthAndInit();

@@ -452,6 +452,26 @@ wss.on('connection', (ws, req) => {
               });
             }
           }
+        } else if (data.action === 'update_server_url') {
+          const targetDeviceId = data.deviceId || Array.from(connectedDevices.keys())[0];
+          const target = connectedDevices.get(targetDeviceId);
+          if (target && target.ws && target.ws.readyState === WebSocket.OPEN) {
+            console.log(`🔄 Enviando cambio remoto de URL a ${targetDeviceId}: ${data.newUrl}`);
+            target.ws.send(JSON.stringify({
+              action: 'update_server_url',
+              newUrl: data.newUrl
+            }));
+            ws.send(JSON.stringify({
+              type: 'SERVER_URL_CHANGE_SENT',
+              deviceId: targetDeviceId,
+              newUrl: data.newUrl
+            }));
+          } else {
+            ws.send(JSON.stringify({
+              type: 'ERROR',
+              message: `El dispositivo ${targetDeviceId} no está conectado.`
+            }));
+          }
         }
       } catch (err) {
         console.error('Error procesando mensaje del dashboard:', err);
